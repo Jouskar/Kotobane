@@ -96,6 +96,7 @@
 └── scripts
     ├── bootstrap-helper.sh
     ├── package-app.sh
+    ├── swift-test.sh
     └── verify.sh
 ```
 
@@ -139,7 +140,7 @@ import Testing
 
 - [ ] **Step 2: Run the test and verify RED**
 
-Run: `swift test --filter SettingsStoreTests`
+Run: `scripts/swift-test.sh --filter SettingsStoreTests`
 
 Expected: compilation fails because `AppSettings` and its related domain types
 do not exist.
@@ -180,7 +181,7 @@ bit-mask `Shortcut.Modifier` option set.
 
 - [ ] **Step 4: Verify GREEN and package compilation**
 
-Run: `swift test --filter SettingsStoreTests && swift build`
+Run: `scripts/swift-test.sh --filter SettingsStoreTests && swift build`
 
 Expected: one passing test and successful debug build.
 
@@ -247,7 +248,7 @@ import Testing
 
 - [ ] **Step 2: Verify RED**
 
-Run: `swift test --filter BriefComposerTests`
+Run: `scripts/swift-test.sh --filter BriefComposerTests`
 
 Expected: compilation fails because `BriefComposer` does not exist.
 
@@ -283,7 +284,7 @@ and Freeform in a private `IntentTemplate`; do not transform `transcript`.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `swift test --filter BriefComposerTests`
+Run: `scripts/swift-test.sh --filter BriefComposerTests`
 
 Expected: two passing tests.
 
@@ -364,7 +365,7 @@ import Testing
 
 - [ ] **Step 2: Verify RED**
 
-Run: `swift test --filter CaptureStoreTests`
+Run: `scripts/swift-test.sh --filter CaptureStoreTests`
 
 Expected: compilation fails because `CaptureStore` does not exist.
 
@@ -381,7 +382,7 @@ errors remain visible rather than silently resetting user preferences.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `swift test --filter 'CaptureStoreTests|SettingsStoreTests'`
+Run: `scripts/swift-test.sh --filter 'CaptureStoreTests|SettingsStoreTests'`
 
 Expected: persistence and settings tests pass with no warnings.
 
@@ -444,7 +445,7 @@ timeouts, and failure after the single restart.
 
 - [ ] **Step 2: Verify RED**
 
-Run: `swift test --filter 'HelperProtocolTests|MLXHelperEngineTests'`
+Run: `scripts/swift-test.sh --filter 'HelperProtocolTests|MLXHelperEngineTests'`
 
 Expected: compilation fails because helper protocol types do not exist.
 
@@ -467,7 +468,7 @@ Retry only crash, EOF, and timeout errors; do not retry model or input errors.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `swift test --filter 'HelperProtocolTests|MLXHelperEngineTests'`
+Run: `scripts/swift-test.sh --filter 'HelperProtocolTests|MLXHelperEngineTests'`
 
 Expected: all helper protocol and engine tests pass.
 
@@ -657,7 +658,7 @@ import Testing
 
 - [ ] **Step 2: Verify RED**
 
-Run: `swift test --filter HandoffCoordinatorTests`
+Run: `scripts/swift-test.sh --filter HandoffCoordinatorTests`
 
 Expected: compilation fails because `HandoffCoordinator` does not exist.
 
@@ -671,7 +672,7 @@ clears or restores the clipboard after a failed open or paste.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `swift test --filter HandoffCoordinatorTests`
+Run: `scripts/swift-test.sh --filter HandoffCoordinatorTests`
 
 Expected: ordering, export, denied-permission, and unavailable-destination tests
 pass.
@@ -752,7 +753,7 @@ handler cleanup, and callback delivery.
 
 - [ ] **Step 2: Verify RED**
 
-Run: `swift test --filter 'CaptureControllerTests|GlobalShortcutTests'`
+Run: `scripts/swift-test.sh --filter 'CaptureControllerTests|GlobalShortcutTests'`
 
 Expected: compilation fails because capture interfaces do not exist.
 
@@ -773,7 +774,7 @@ recorder is stopped. Helper failures preserve audio and attach retry guidance.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `swift test --filter 'CaptureControllerTests|GlobalShortcutTests'`
+Run: `scripts/swift-test.sh --filter 'CaptureControllerTests|GlobalShortcutTests'`
 
 Expected: controller transition, cleanup, retry, and shortcut tests pass.
 
@@ -822,7 +823,7 @@ import Testing
 
 - [ ] **Step 2: Verify RED**
 
-Run: `swift test --filter ModelManagerTests`
+Run: `scripts/swift-test.sh --filter ModelManagerTests`
 
 Expected: compilation fails because `ModelManager` does not exist.
 
@@ -836,7 +837,7 @@ report error codes without treating staging as ready.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `swift test --filter ModelManagerTests`
+Run: `scripts/swift-test.sh --filter ModelManagerTests`
 
 Expected: state, capacity, installer-failure, ready-marker, and deletion tests
 pass.
@@ -920,7 +921,7 @@ affect behavior.
 
 - [ ] **Step 4: Run the complete Swift test suite**
 
-Run: `swift test`
+Run: `scripts/swift-test.sh`
 
 Expected: all tests pass.
 
@@ -975,7 +976,7 @@ Expected: failure because the packaging script does not exist.
 `verify.sh` runs:
 
 ```bash
-swift test
+scripts/swift-test.sh
 python3 -m unittest discover -s helper/tests -v
 swift build -c release --product Kotobane
 scripts/package-app.sh
