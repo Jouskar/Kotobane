@@ -1,0 +1,9 @@
+{
+  "architecture": "arm64",
+  "archiveSize": 25153180,
+  "minimumMacOS": "14.0",
+  "pythonVersion": "3.12.13",
+  "release": "20260718",
+  "sha256": "62aeee6161d57303a71a138b75fd5cc6fb8c89c4b1d9c7f0a052d89fa0b6652b",
+  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.12.13%2B20260718-aarch64-apple-darwin-install_only.tar.gz"
+}
