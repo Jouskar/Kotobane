@@ -140,7 +140,7 @@ import Testing
 
 - [ ] **Step 2: Run the test and verify RED**
 
-Run: `scripts/swift-test.sh --filter SettingsStoreTests`
+Run: `scripts/swift-test.sh --filter defaultsFavorPrivateTurkishWorkflow`
 
 Expected: compilation fails because `AppSettings` and its related domain types
 do not exist.
@@ -181,7 +181,7 @@ bit-mask `Shortcut.Modifier` option set.
 
 - [ ] **Step 4: Verify GREEN and package compilation**
 
-Run: `scripts/swift-test.sh --filter SettingsStoreTests && swift build`
+Run: `scripts/swift-test.sh --filter defaultsFavorPrivateTurkishWorkflow && swift build`
 
 Expected: one passing test and successful debug build.
 
@@ -729,7 +729,7 @@ import Testing
 }
 
 @MainActor
-@Test func persistenceFailurePreservesAudioAndOffersRetry() async {
+@Test func persistenceFailurePreservesAudioAndOffersRetry() async throws {
     let events = EventRecorder()
     let controller = makeController(
         recorder: SpyRecorder(events),
