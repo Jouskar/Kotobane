@@ -14,8 +14,7 @@ import Testing
 
     ## Raw transcript
 
-      Bunu değiştirme.
-    İkinci satır.  
+    \(transcript)
 
     ## Requested response
 
