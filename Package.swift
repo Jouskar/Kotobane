@@ -7,6 +7,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "KotobaneCore", targets: ["KotobaneCore"]),
+        .executable(name: "Kotobane", targets: ["KotobaneApp"]),
         .executable(
             name: "kotobane-launch-shim",
             targets: ["KotobaneLaunchShim"]
@@ -14,6 +15,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "KotobaneCore"),
+        .executableTarget(
+            name: "KotobaneApp",
+            dependencies: ["KotobaneCore"]
+        ),
         .executableTarget(
             name: "KotobaneLaunchShim",
             path: "Sources/KotobaneLaunchShim"
