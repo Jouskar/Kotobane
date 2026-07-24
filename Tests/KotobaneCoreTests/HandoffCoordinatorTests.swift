@@ -92,7 +92,7 @@ import Testing
     #expect(events.values == [
         "copy:brief",
         "open:claude",
-        "paste-trust-check:prompt",
+        "paste-trust-check:no-prompt",
     ])
     #expect(result == .manualPasteRequired(reason: .accessibilityDenied))
 }
@@ -115,7 +115,7 @@ import Testing
     #expect(events.values == [
         "copy:brief",
         "open:codex",
-        "paste-trust-check:prompt",
+        "paste-trust-check:no-prompt",
         "paste",
     ])
     #expect(result == .manualPasteRequired(reason: .pasteFailed))
@@ -135,7 +135,7 @@ import Testing
     #expect(events.values == [
         "copy:brief",
         "open:claude",
-        "paste-trust-check:prompt",
+        "paste-trust-check:no-prompt",
         "paste",
     ])
     #expect(result == .pasted)
@@ -157,22 +157,40 @@ import Testing
 }
 
 @MainActor
-@Test func systemOpenerFallsBackFromConfiguredBundleToConfiguredURL() async {
+@Test func systemOpenerWaitsForURLHandlerActivationAfterBundleLaunchFails() async {
     let events = HandoffEventRecorder()
     let applicationURL = URL(fileURLWithPath: "/Applications/Codex.app")
+    let handlerURL = URL(fileURLWithPath: "/Applications/Browser.app")
+    var elapsed = Duration.zero
+    var handlerIsActive = false
+    let activationWaiter = ApplicationActivationWaiter(
+        timeout: .milliseconds(100),
+        pollInterval: .milliseconds(50),
+        elapsed: { elapsed },
+        sleep: { duration in
+            events.record("sleep")
+            elapsed += duration
+            handlerIsActive = true
+        }
+    )
     let opener = SystemDestinationOpener(
         applicationURLForBundleIdentifier: { bundleIdentifier in
             events.record("lookup:\(bundleIdentifier)")
             return applicationURL
         },
-        launchApplication: { url in
-            events.record("launch:\(url.path)")
-            return false
+        applicationURLForURL: { url in
+            events.record("handler:\(url.absoluteString)")
+            return handlerURL
         },
-        openURL: { url in
-            events.record("url:\(url.absoluteString)")
-            return true
-        }
+        openApplication: { url, contentURL in
+            events.record("open:\(url.path):\(contentURL?.absoluteString ?? "none")")
+            guard contentURL != nil else { return nil }
+            return OpenedApplication {
+                events.record("active:\(handlerIsActive)")
+                return handlerIsActive
+            }
+        },
+        activationWaiter: activationWaiter
     )
 
     let result = await opener.open(.codex)
@@ -180,27 +198,36 @@ import Testing
     #expect(result)
     #expect(events.values == [
         "lookup:\(Destination.codex.bundleIdentifier!)",
-        "launch:\(applicationURL.path)",
-        "url:\(Destination.codex.url!.absoluteString)",
+        "open:\(applicationURL.path):none",
+        "handler:\(Destination.codex.url!.absoluteString)",
+        "open:\(handlerURL.path):\(Destination.codex.url!.absoluteString)",
+        "active:false",
+        "sleep",
+        "active:true",
     ])
 }
 
 @MainActor
-@Test func systemOpenerUsesConfiguredURLWhenBundleIsUnavailable() async {
+@Test func systemOpenerUsesConfiguredURLHandlerWhenBundleIsUnavailable() async {
     let events = HandoffEventRecorder()
+    let handlerURL = URL(fileURLWithPath: "/Applications/Browser.app")
     let opener = SystemDestinationOpener(
         applicationURLForBundleIdentifier: { bundleIdentifier in
             events.record("lookup:\(bundleIdentifier)")
             return nil
         },
-        launchApplication: { _ in
-            events.record("unexpected-launch")
-            return true
+        applicationURLForURL: { url in
+            events.record("handler:\(url.absoluteString)")
+            return handlerURL
         },
-        openURL: { url in
-            events.record("url:\(url.absoluteString)")
-            return true
-        }
+        openApplication: { url, contentURL in
+            events.record("open:\(url.path):\(contentURL?.absoluteString ?? "none")")
+            return OpenedApplication(isActive: { true })
+        },
+        activationWaiter: ApplicationActivationWaiter(
+            timeout: .seconds(1),
+            pollInterval: .milliseconds(50)
+        )
     )
 
     let result = await opener.open(.claude)
@@ -208,8 +235,131 @@ import Testing
     #expect(result)
     #expect(events.values == [
         "lookup:\(Destination.claude.bundleIdentifier!)",
-        "url:\(Destination.claude.url!.absoluteString)",
+        "handler:\(Destination.claude.url!.absoluteString)",
+        "open:\(handlerURL.path):\(Destination.claude.url!.absoluteString)",
     ])
+}
+
+@MainActor
+@Test func coordinatorPastesOnlyAfterInstalledApplicationBecomesActive() async throws {
+    let events = HandoffEventRecorder()
+    let applicationURL = URL(fileURLWithPath: "/Applications/Claude.app")
+    var elapsed = Duration.zero
+    var applicationIsActive = false
+    let opener = SystemDestinationOpener(
+        applicationURLForBundleIdentifier: { _ in applicationURL },
+        applicationURLForURL: { _ in nil },
+        openApplication: { _, _ in
+            events.record("launch-completed")
+            return OpenedApplication {
+                events.record("active:\(applicationIsActive)")
+                return applicationIsActive
+            }
+        },
+        activationWaiter: ApplicationActivationWaiter(
+            timeout: .milliseconds(100),
+            pollInterval: .milliseconds(50),
+            elapsed: { elapsed },
+            sleep: { duration in
+                events.record("sleep")
+                elapsed += duration
+                applicationIsActive = true
+            }
+        )
+    )
+    let coordinator = HandoffCoordinator(
+        clipboard: HandoffSpyClipboard(events: events, fails: false),
+        opener: opener,
+        paste: HandoffSpyPaste(events: events, trusted: true, succeeds: true),
+        exporter: HandoffSpyExporter(events: events, url: nil)
+    )
+
+    let result = try await coordinator.perform(
+        brief: "brief",
+        destination: .claude,
+        pasteAfterOpening: true
+    )
+
+    #expect(result == .pasted)
+    #expect(events.values == [
+        "copy:brief",
+        "launch-completed",
+        "active:false",
+        "sleep",
+        "active:true",
+        "paste-trust-check:no-prompt",
+        "paste",
+    ])
+}
+
+@MainActor
+@Test func activationTimeoutReturnsUnavailableWithoutAttemptingPaste() async throws {
+    let events = HandoffEventRecorder()
+    let applicationURL = URL(fileURLWithPath: "/Applications/Codex.app")
+    var elapsed = Duration.zero
+    let opener = SystemDestinationOpener(
+        applicationURLForBundleIdentifier: { _ in applicationURL },
+        applicationURLForURL: { _ in nil },
+        openApplication: { _, _ in
+            events.record("launch-completed")
+            return OpenedApplication {
+                events.record("active:false")
+                return false
+            }
+        },
+        activationWaiter: ApplicationActivationWaiter(
+            timeout: .milliseconds(100),
+            pollInterval: .milliseconds(50),
+            elapsed: { elapsed },
+            sleep: { duration in
+                events.record("sleep")
+                elapsed += duration
+            }
+        )
+    )
+    let coordinator = HandoffCoordinator(
+        clipboard: HandoffSpyClipboard(events: events, fails: false),
+        opener: opener,
+        paste: HandoffSpyPaste(events: events, trusted: true, succeeds: true),
+        exporter: HandoffSpyExporter(events: events, url: nil)
+    )
+
+    let result = try await coordinator.perform(
+        brief: "brief",
+        destination: .codex,
+        pasteAfterOpening: true
+    )
+
+    #expect(result == .manualPasteRequired(reason: .destinationUnavailable))
+    #expect(events.values == [
+        "copy:brief",
+        "launch-completed",
+        "active:false",
+        "sleep",
+        "active:false",
+        "sleep",
+        "active:false",
+    ])
+}
+
+@MainActor
+@Test func activationTimeoutBudgetStartsWhenEachWaitBegins() async {
+    var elapsed = Duration.seconds(500)
+    var applicationIsActive = false
+    let waiter = ApplicationActivationWaiter(
+        timeout: .milliseconds(100),
+        pollInterval: .milliseconds(50),
+        elapsed: { elapsed },
+        sleep: { duration in
+            elapsed += duration
+            applicationIsActive = true
+        }
+    )
+    let application = OpenedApplication(isActive: { applicationIsActive })
+
+    let result = await waiter.waitUntilActive(application)
+
+    #expect(result)
 }
 
 @MainActor

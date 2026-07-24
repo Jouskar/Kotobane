@@ -23,50 +23,175 @@ public struct SystemClipboardWriter: ClipboardWriting {
 @MainActor
 public struct SystemDestinationOpener: DestinationOpening {
     private let applicationURLForBundleIdentifier: @MainActor (String) -> URL?
-    private let launchApplication: @MainActor (URL) async -> Bool
-    private let openURL: @MainActor (URL) -> Bool
+    private let applicationURLForURL: @MainActor (URL) -> URL?
+    private let openApplication: @MainActor (URL, URL?) async -> OpenedApplication?
+    private let activationWaiter: ApplicationActivationWaiter
 
     public init() {
         self.init(
             applicationURLForBundleIdentifier: {
                 NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
             },
-            launchApplication: { applicationURL in
-                await withCheckedContinuation { continuation in
-                    NSWorkspace.shared.openApplication(
-                        at: applicationURL,
-                        configuration: NSWorkspace.OpenConfiguration()
-                    ) { application, error in
-                        continuation.resume(returning: application != nil && error == nil)
-                    }
-                }
+            applicationURLForURL: {
+                NSWorkspace.shared.urlForApplication(toOpen: $0)
             },
-            openURL: { NSWorkspace.shared.open($0) }
+            openApplication: Self.openApplication,
+            activationWaiter: ApplicationActivationWaiter(
+                timeout: .seconds(3),
+                pollInterval: .milliseconds(50)
+            )
         )
     }
 
     init(
         applicationURLForBundleIdentifier: @escaping @MainActor (String) -> URL?,
-        launchApplication: @escaping @MainActor (URL) async -> Bool,
-        openURL: @escaping @MainActor (URL) -> Bool
+        applicationURLForURL: @escaping @MainActor (URL) -> URL?,
+        openApplication: @escaping @MainActor (URL, URL?) async -> OpenedApplication?,
+        activationWaiter: ApplicationActivationWaiter
     ) {
         self.applicationURLForBundleIdentifier = applicationURLForBundleIdentifier
-        self.launchApplication = launchApplication
-        self.openURL = openURL
+        self.applicationURLForURL = applicationURLForURL
+        self.openApplication = openApplication
+        self.activationWaiter = activationWaiter
     }
 
     public func open(_ destination: Destination) async -> Bool {
         if let bundleIdentifier = destination.bundleIdentifier,
            let applicationURL = applicationURLForBundleIdentifier(bundleIdentifier),
-           await launchApplication(applicationURL)
+           await openAndWaitForActivation(
+               applicationURL: applicationURL,
+               contentURL: nil
+           )
         {
             return true
         }
 
-        guard let fallbackURL = destination.url else {
+        guard let fallbackURL = destination.url,
+              let handlerApplicationURL = applicationURLForURL(fallbackURL)
+        else {
             return false
         }
-        return openURL(fallbackURL)
+        return await openAndWaitForActivation(
+            applicationURL: handlerApplicationURL,
+            contentURL: fallbackURL
+        )
+    }
+
+    private func openAndWaitForActivation(
+        applicationURL: URL,
+        contentURL: URL?
+    ) async -> Bool {
+        guard let application = await openApplication(applicationURL, contentURL) else {
+            return false
+        }
+        return await activationWaiter.waitUntilActive(application)
+    }
+
+    private static func openApplication(
+        at applicationURL: URL,
+        contentURL: URL?
+    ) async -> OpenedApplication? {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        return await withCheckedContinuation { continuation in
+            let completion: @Sendable (NSRunningApplication?, (any Error)?) -> Void = {
+                application,
+                error in
+                guard let application, error == nil else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(
+                    returning: OpenedApplication(
+                        isActive: { application.isActive }
+                    )
+                )
+            }
+
+            if let contentURL {
+                NSWorkspace.shared.open(
+                    [contentURL],
+                    withApplicationAt: applicationURL,
+                    configuration: configuration,
+                    completionHandler: completion
+                )
+            } else {
+                NSWorkspace.shared.openApplication(
+                    at: applicationURL,
+                    configuration: configuration,
+                    completionHandler: completion
+                )
+            }
+        }
+    }
+}
+
+final class OpenedApplication: @unchecked Sendable {
+    private let activityChecking: @MainActor () -> Bool
+
+    init(isActive: @escaping @MainActor () -> Bool) {
+        self.activityChecking = isActive
+    }
+
+    @MainActor
+    var isActive: Bool {
+        activityChecking()
+    }
+}
+
+@MainActor
+struct ApplicationActivationWaiter {
+    private let timeout: Duration
+    private let pollInterval: Duration
+    private let elapsed: @MainActor () -> Duration
+    private let sleep: @MainActor (Duration) async throws -> Void
+
+    init(timeout: Duration, pollInterval: Duration) {
+        let clock = ContinuousClock()
+        let start = clock.now
+        self.init(
+            timeout: timeout,
+            pollInterval: pollInterval,
+            elapsed: { start.duration(to: clock.now) },
+            sleep: { try await clock.sleep(for: $0) }
+        )
+    }
+
+    init(
+        timeout: Duration,
+        pollInterval: Duration,
+        elapsed: @escaping @MainActor () -> Duration,
+        sleep: @escaping @MainActor (Duration) async throws -> Void
+    ) {
+        self.timeout = timeout
+        self.pollInterval = pollInterval
+        self.elapsed = elapsed
+        self.sleep = sleep
+    }
+
+    func waitUntilActive(_ application: OpenedApplication) async -> Bool {
+        let startedAt = elapsed()
+        while true {
+            if application.isActive {
+                return true
+            }
+
+            let elapsedDuration = max(.zero, elapsed() - startedAt)
+            guard timeout > .zero,
+                  pollInterval > .zero,
+                  elapsedDuration < timeout
+            else {
+                return false
+            }
+
+            let remaining = timeout - elapsedDuration
+            do {
+                try await sleep(min(pollInterval, remaining))
+            } catch {
+                return false
+            }
+        }
     }
 }
 

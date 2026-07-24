@@ -80,7 +80,7 @@ public struct HandoffCoordinator {
             guard pasteAfterOpening else {
                 return .activated(pasteAttempted: false)
             }
-            guard paste.isTrusted(promptIfNeeded: true) else {
+            guard paste.isTrusted(promptIfNeeded: false) else {
                 return .manualPasteRequired(reason: .accessibilityDenied)
             }
             guard paste.paste() else {
