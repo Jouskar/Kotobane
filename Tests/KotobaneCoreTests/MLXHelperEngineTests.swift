@@ -119,6 +119,29 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
     #expect(await launcher.launchCount == 1)
 }
 
+@Test func completedResponseWithoutTrailingNewlineIsRejectedWithoutRetry() async throws {
+    let fixture = try AudioFixture(named: "missing-newline.wav")
+    defer { fixture.remove() }
+    let stdout = Data(
+        #"{"detectedLanguage":"tr","durationSeconds":1.25,"id":"\#(fixture.requestID.uuidString.lowercased())","status":"completed","text":"Merhaba"}"#
+            .utf8
+    )
+    let launcher = ScriptedProcessLauncher(
+        outcomes: [.output(.init(stdout: stdout, stderr: Data(), exitCode: 0))]
+    )
+
+    let failure = await transcriptionFailure {
+        try await fixture.engine(launcher: launcher).transcribe(fixture.request)
+    }
+
+    guard case .protocolViolation(let message, _) = failure else {
+        Issue.record("Expected protocol violation, got \(String(describing: failure))")
+        return
+    }
+    #expect(message.contains("newline"))
+    #expect(await launcher.launchCount == 1)
+}
+
 @Test func audioOutsideAllowedRootIsRejectedBeforeLaunch() async throws {
     let fixture = try AudioFixture(named: "inside.wav")
     defer { fixture.remove() }
@@ -319,6 +342,50 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
     #expect(!processExists(descendantPID))
 }
 
+@Test func launcherResumesOnlyAfterDirectProcessAndAllIOWorkersExit() async throws {
+    let fixture = try AudioFixture(named: "worker-order.wav")
+    defer { fixture.remove() }
+    let observer = RecordingProcessLifecycleObserver()
+
+    let result = try await fixture.realEngine(
+        timeout: .seconds(2),
+        observer: observer
+    ).transcribe(fixture.request)
+
+    #expect(result.text == "Merhaba")
+    let events = observer.events
+    let resume = try #require(events.firstIndex(of: .willResume))
+    for event in [
+        ProcessLifecycleEvent.directProcessExited,
+        .stdinWorkerExited,
+        .stdoutWorkerExited,
+        .stderrWorkerExited,
+    ] {
+        let exit = try #require(events.firstIndex(of: event))
+        #expect(exit < resume)
+    }
+}
+
+@Test func delayedSecondResponseRecordIsDrainedAndRejectedWithoutRetry() async throws {
+    let fixture = try AudioFixture(named: "delayed-second-record.wav")
+    defer { fixture.remove() }
+    let pidsURL = URL(fileURLWithPath: fixture.audioURL.path + ".pids")
+    let clock = ContinuousClock()
+    let start = clock.now
+
+    let failure = await transcriptionFailure {
+        try await fixture.realEngine(timeout: .seconds(2)).transcribe(fixture.request)
+    }
+
+    guard case .protocolViolation(let message, _) = failure else {
+        Issue.record("Expected protocol violation, got \(String(describing: failure))")
+        return
+    }
+    #expect(message.contains("exactly one"))
+    #expect(start.duration(to: clock.now) >= .milliseconds(150))
+    #expect(try recordedPIDs(at: pidsURL).count == 1)
+}
+
 @Test func helperExitingBeforeReadingRequestIsClassifiedAsCrashAndRetriedOnce() async throws {
     let fixture = try AudioFixture(named: "exit-before-read.wav")
     defer { fixture.remove() }
@@ -364,7 +431,7 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
         Issue.record("Expected helper launch failure, got \(String(describing: failure))")
         return
     }
-    #expect(isolation.commandCount == 1)
+    #expect(isolation.commandCount == 0)
 }
 
 @Test func oversizedInputIsRejectedBeforeLaunch() async throws {
@@ -433,9 +500,91 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
         command.arguments == [
             "-p",
             "(version 1)\n(allow default)\n(deny network*)\n",
+            "/bin/sh",
+            "-c",
+            #"printf x >&63 || exit 125; exec 63>&-; exec "$@""#,
+            "kotobane-helper",
             "/fixture/helper",
         ]
     )
+    #expect(command.isolationHandshakeDescriptor == 63)
+}
+
+@Test func productionSandboxStrategyRunsHelperOnlyAfterIsolationHandshake() async throws {
+    let fixture = try AudioFixture(named: "production-wrapper.wav")
+    defer { fixture.remove() }
+    let invocation = try fixture.directInvocation(
+        environment: [
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "NO_PROXY": "*",
+        ]
+    )
+    let launcher = FoundationProcessLauncher(
+        isolation: SandboxExecNetworkIsolation(sandboxExecutableURL: fakeHelperURL)
+    )
+
+    let output = try await launcher.run(invocation)
+
+    #expect(output.exitCode == 0)
+    #expect(!output.stdout.isEmpty)
+}
+
+@Test func productionSandboxRejectionIsNonRetryableIsolationFailure() async throws {
+    let fixture = try AudioFixture(named: "production-rejection.wav")
+    defer { fixture.remove() }
+    let invocation = try fixture.directInvocation(
+        environment: ["KOTOBANE_FAKE_SANDBOX_MODE": "reject"]
+    )
+    let launcher = FoundationProcessLauncher(
+        isolation: SandboxExecNetworkIsolation(sandboxExecutableURL: fakeHelperURL)
+    )
+
+    do {
+        _ = try await launcher.run(invocation)
+        Issue.record("Expected isolation failure")
+    } catch let failure as TranscriptionFailure {
+        guard case .isolationUnavailable(let diagnostic) = failure else {
+            Issue.record("Expected isolation failure, got \(failure)")
+            return
+        }
+        #expect(diagnostic.contains("fixture sandbox rejected"))
+        #expect(!failure.permitsRestart)
+    } catch {
+        Issue.record("Unexpected error: \(error)")
+    }
+}
+
+@Test func hostileDescendantsWithoutSelfGroupingAreKilledAsOneSpawnGroup() async throws {
+    let fixture = try AudioFixture(named: "hostile-descendant-timeout.wav")
+    defer { fixture.remove() }
+    let pidsURL = URL(fileURLWithPath: fixture.audioURL.path + ".pids")
+    let observer = RecordingProcessLifecycleObserver()
+
+    let failure = await transcriptionFailure {
+        try await fixture.realEngine(
+            timeout: .milliseconds(350),
+            limits: .init(terminationGrace: .milliseconds(75)),
+            observer: observer
+        ).transcribe(fixture.request)
+    }
+
+    #expect(failure == .timedOut)
+    let pids = try recordedPIDs(at: pidsURL)
+    #expect(pids.count == 4)
+    for pid in pids {
+        try await waitForProcessExit(pid)
+        #expect(!processExists(pid))
+    }
+    let signals = observer.events.compactMap { event -> (UUID, Int32)? in
+        guard case .signal(let generation, let signal) = event else {
+            return nil
+        }
+        return (generation, signal)
+    }
+    #expect(signals.filter { $0.1 == SIGTERM }.count == 2)
+    #expect(signals.filter { $0.1 == SIGKILL }.count == 2)
+    #expect(Set(signals.map(\.0)).count == 2)
 }
 
 @Test func productionIsolationFailsClosedWhenSandboxExecIsUnavailable() async {
@@ -536,19 +685,46 @@ private struct AudioFixture {
         timeout: Duration,
         limits: HelperProcessLimits = .init(),
         forcedMode: String? = nil,
-        markerURL: URL? = nil
+        markerURL: URL? = nil,
+        observer: (any ProcessLifecycleObserving)? = nil
     ) -> MLXHelperEngine {
-        MLXHelperEngine(
+        let isolation = TestProcessIsolation(
+            forcedMode: forcedMode,
+            markerURL: markerURL
+        )
+        let launcher: FoundationProcessLauncher
+        if let observer {
+            launcher = FoundationProcessLauncher(
+                isolation: isolation,
+                lifecycleObserver: observer
+            )
+        } else {
+            launcher = FoundationProcessLauncher(isolation: isolation)
+        }
+        return MLXHelperEngine(
             helperExecutableURL: fakeHelperURL,
             allowedAudioRoot: root,
             timeout: timeout,
             limits: limits,
-            launcher: FoundationProcessLauncher(
-                isolation: TestProcessIsolation(
-                    forcedMode: forcedMode,
-                    markerURL: markerURL
-                )
-            )
+            launcher: launcher
+        )
+    }
+
+    func directInvocation(environment: [String: String]) throws -> HelperProcessInvocation {
+        let request = HelperRequest(
+            id: requestID,
+            action: "transcribe",
+            audioPath: audioURL.path,
+            language: "Turkish",
+            model: ModelChoice.small.rawValue
+        )
+        var mergedEnvironment = ProcessInfo.processInfo.environment
+        mergedEnvironment.merge(environment) { _, new in new }
+        return HelperProcessInvocation(
+            executableURL: fakeHelperURL,
+            request: Data(try HelperCodec.encode(request).utf8),
+            environment: mergedEnvironment,
+            timeout: .seconds(2)
         )
     }
 
@@ -598,6 +774,26 @@ private final class CountingNoopIsolation: HelperProcessIsolating, @unchecked Se
         count += 1
         lock.unlock()
         return HelperProcessCommand(executableURL: helperExecutableURL, arguments: [])
+    }
+}
+
+private final class RecordingProcessLifecycleObserver:
+    ProcessLifecycleObserving,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var recordedEvents: [ProcessLifecycleEvent] = []
+
+    var events: [ProcessLifecycleEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedEvents
+    }
+
+    func processLifecycleDidEmit(_ event: ProcessLifecycleEvent) {
+        lock.lock()
+        recordedEvents.append(event)
+        lock.unlock()
     }
 }
 

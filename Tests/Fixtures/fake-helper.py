@@ -7,10 +7,13 @@ import sys
 import time
 
 
-try:
-    os.setpgid(0, 0)
-except PermissionError:
-    pass
+if len(sys.argv) >= 4 and sys.argv[1] == "-p":
+    profile = sys.argv[2]
+    assert profile == "(version 1)\n(allow default)\n(deny network*)\n"
+    if os.environ.get("KOTOBANE_FAKE_SANDBOX_MODE") == "reject":
+        print("fixture sandbox rejected profile", file=sys.stderr, flush=True)
+        raise SystemExit(78)
+    os.execv(sys.argv[3], sys.argv[3:])
 
 
 def completed(request):
@@ -45,7 +48,9 @@ mode = forced_mode or audio_path.stem
 
 if mode in {
     "cancel-hostile",
+    "delayed-second-record",
     "hostile-timeout",
+    "hostile-descendant-timeout",
     "oversized-stdout",
     "oversized-stderr",
 }:
@@ -68,6 +73,21 @@ elif mode in {"cancel-hostile", "hostile-timeout"}:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     while True:
         time.sleep(1)
+elif mode == "hostile-descendant-timeout":
+    child = os.fork()
+    if child == 0:
+        with marker.open("a", encoding="utf-8") as handle:
+            handle.write(f"{os.getpid()}\n")
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(1)
+    while True:
+        time.sleep(1)
+elif mode == "delayed-second-record":
+    response = json.dumps(completed(request), sort_keys=True)
+    print(response, flush=True)
+    time.sleep(0.2)
+    print(response, flush=True)
 elif mode == "oversized-stdout":
     print("x" * 2048, flush=True)
 elif mode == "oversized-stderr":

@@ -72,10 +72,16 @@ public protocol ProcessLaunching: Sendable {
 public struct HelperProcessCommand: Equatable, Sendable {
     public let executableURL: URL
     public let arguments: [String]
+    public let isolationHandshakeDescriptor: Int32?
 
-    public init(executableURL: URL, arguments: [String]) {
+    public init(
+        executableURL: URL,
+        arguments: [String],
+        isolationHandshakeDescriptor: Int32? = nil
+    ) {
         self.executableURL = executableURL
         self.arguments = arguments
+        self.isolationHandshakeDescriptor = isolationHandshakeDescriptor
     }
 }
 
@@ -86,6 +92,9 @@ public protocol HelperProcessIsolating: Sendable {
 public struct SandboxExecNetworkIsolation: HelperProcessIsolating {
     public static let denyNetworkProfile =
         "(version 1)\n(allow default)\n(deny network*)\n"
+    public static let handshakeDescriptor: Int32 = 63
+    public static let helperLaunchScript =
+        #"printf x >&63 || exit 125; exec 63>&-; exec "$@""#
 
     private let sandboxExecutableURL: URL
 
@@ -104,19 +113,52 @@ public struct SandboxExecNetworkIsolation: HelperProcessIsolating {
             arguments: [
                 "-p",
                 Self.denyNetworkProfile,
+                "/bin/sh",
+                "-c",
+                Self.helperLaunchScript,
+                "kotobane-helper",
                 helperExecutableURL.path,
-            ]
+            ],
+            isolationHandshakeDescriptor: Self.handshakeDescriptor
         )
     }
 }
 
+enum ProcessLifecycleEvent: Equatable, Sendable {
+    case directProcessExited
+    case stdinWorkerExited
+    case stdoutWorkerExited
+    case stderrWorkerExited
+    case isolationWorkerExited
+    case signal(generation: UUID, signal: Int32)
+    case willResume
+}
+
+protocol ProcessLifecycleObserving: Sendable {
+    func processLifecycleDidEmit(_ event: ProcessLifecycleEvent)
+}
+
+private struct NullProcessLifecycleObserver: ProcessLifecycleObserving {
+    func processLifecycleDidEmit(_ event: ProcessLifecycleEvent) {}
+}
+
 public struct FoundationProcessLauncher: ProcessLaunching {
     private let isolation: any HelperProcessIsolating
+    private let lifecycleObserver: any ProcessLifecycleObserving
 
     public init(
         isolation: any HelperProcessIsolating = SandboxExecNetworkIsolation()
     ) {
         self.isolation = isolation
+        lifecycleObserver = NullProcessLifecycleObserver()
+    }
+
+    init(
+        isolation: any HelperProcessIsolating,
+        lifecycleObserver: any ProcessLifecycleObserving
+    ) {
+        self.isolation = isolation
+        self.lifecycleObserver = lifecycleObserver
     }
 
     public func run(_ invocation: HelperProcessInvocation) async throws -> HelperProcessOutput {
@@ -124,6 +166,11 @@ public struct FoundationProcessLauncher: ProcessLaunching {
         guard invocation.request.count <= invocation.limits.maximumRequestBytes else {
             throw TranscriptionFailure.invalidRequest(
                 "request exceeds \(invocation.limits.maximumRequestBytes) UTF-8 bytes"
+            )
+        }
+        guard FileManager.default.isExecutableFile(atPath: invocation.executableURL.path) else {
+            throw TranscriptionFailure.helperLaunch(
+                "Helper executable is missing or not executable: \(invocation.executableURL.path)"
             )
         }
 
@@ -136,7 +183,11 @@ public struct FoundationProcessLauncher: ProcessLaunching {
             throw TranscriptionFailure.isolationUnavailable(error.localizedDescription)
         }
 
-        let execution = ProcessExecution(invocation: invocation, command: command)
+        let execution = ProcessExecution(
+            invocation: invocation,
+            command: command,
+            observer: lifecycleObserver
+        )
         return try await execution.execute()
     }
 }

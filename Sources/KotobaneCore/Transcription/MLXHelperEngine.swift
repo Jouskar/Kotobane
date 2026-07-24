@@ -143,13 +143,16 @@ public struct MLXHelperEngine: TranscriptionEngine, Sendable {
     }
 
     private static func singleResponseLine(from data: Data) throws -> Data {
-        var lines = data.split(separator: 0x0A, omittingEmptySubsequences: false)
-        if lines.last?.isEmpty == true {
-            lines.removeLast()
-        }
-        guard lines.count == 1, let line = lines.first, !line.isEmpty else {
+        guard data.last == 0x0A else {
             throw TranscriptionFailure.protocolViolation(
-                message: "Expected exactly one response line",
+                message: "Response must be newline-terminated",
+                stderr: ""
+            )
+        }
+        let line = data.dropLast()
+        guard !line.isEmpty, !line.contains(0x0A) else {
+            throw TranscriptionFailure.protocolViolation(
+                message: "Expected exactly one newline-terminated response record",
                 stderr: ""
             )
         }

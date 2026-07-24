@@ -7,49 +7,54 @@ final class ProcessExecution: @unchecked Sendable {
         case timeout
         case protocolViolation(String)
         case writeFailure
-    }
-
-    private enum Stream {
-        case stdout
-        case stderr
+        case isolationFailure
+        case lifecycleFailure(String)
     }
 
     private let invocation: HelperProcessInvocation
-    private let process = Process()
-    private let stdin = Pipe()
-    private let stdout = Pipe()
-    private let stderr = Pipe()
+    private let command: HelperProcessCommand
+    private let observer: any ProcessLifecycleObserving
+    private let generation = UUID()
     private let lock = NSLock()
+    private let reapSemaphore = DispatchSemaphore(value: 0)
 
     private var continuation: CheckedContinuation<HelperProcessOutput, Error>?
+    private var process: POSIXProcessHandle?
     private var processStarted = false
-    private var processExited = false
-    private var processID: pid_t?
-    private var ownedProcessGroupID: pid_t?
+    private var directProcessExited = false
+    private var directProcessReaped = false
     private var exitCode: Int32 = 0
+    private var stdinWorkerExited = false
+    private var stdoutWorkerExited = false
+    private var stderrWorkerExited = false
+    private var isolationWorkerExited: Bool
     private var stdoutData = Data()
     private var stderrData = Data()
-    private var stdoutFinished = false
-    private var stderrFinished = false
-    private var writerFinished = false
     private var terminationCause: TerminationCause?
     private var cancellationRequested = false
+    private var stopInput = false
+    private var stopOutputs = false
+    private var stopIsolation = false
+    private var generationIsValid = true
     private var didFinish = false
-    private var stdinClosed = false
-    private var stdoutClosed = false
-    private var stderrClosed = false
+    private var reapWasAllowed = false
+    private var sigtermWasSent = false
+    private var escalationWasReserved = false
+    private var escalationDidFire = false
+    private var postExitCleanupWasReserved = false
     private var timeoutTask: Task<Void, Never>?
     private var escalationTask: Task<Void, Never>?
-    private var pipeDrainTask: Task<Void, Never>?
+    private var postExitCleanupTask: Task<Void, Never>?
 
-    init(invocation: HelperProcessInvocation, command: HelperProcessCommand) {
+    init(
+        invocation: HelperProcessInvocation,
+        command: HelperProcessCommand,
+        observer: any ProcessLifecycleObserving
+    ) {
         self.invocation = invocation
-        process.executableURL = command.executableURL
-        process.arguments = command.arguments
-        process.environment = invocation.environment
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
+        self.command = command
+        self.observer = observer
+        isolationWorkerExited = command.isolationHandshakeDescriptor == nil
     }
 
     func execute() async throws -> HelperProcessOutput {
@@ -69,193 +74,228 @@ final class ProcessExecution: @unchecked Sendable {
         let wasCancelled = cancellationRequested
         lock.unlock()
         guard !wasCancelled else {
-            finishBeforeLaunch(with: CancellationError())
+            finishBeforeSpawn(with: CancellationError())
             return
         }
 
+        var pipes: ProcessPipeSet
         do {
-            try configureNonblockingIO()
-            process.terminationHandler = { [weak self] process in
-                process.waitUntilExit()
-                self?.didExit(status: process.terminationStatus)
-            }
-            try process.run()
+            pipes = try ProcessPipeSet(
+                needsIsolationHandshake: command.isolationHandshakeDescriptor != nil,
+                reservedDescriptor: command.isolationHandshakeDescriptor
+            )
         } catch {
-            closeAllHandles()
-            finishBeforeLaunch(
+            finishBeforeSpawn(
                 with: TranscriptionFailure.helperLaunch(error.localizedDescription)
             )
             return
         }
 
-        try? stdin.fileHandleForReading.close()
-        try? stdout.fileHandleForWriting.close()
-        try? stderr.fileHandleForWriting.close()
-
-        let pid = process.processIdentifier
-        let ownsGroup = setpgid(pid, pid) == 0
-        lock.lock()
-        processStarted = true
-        processID = pid
-        if ownsGroup {
-            ownedProcessGroupID = pid
+        let process: POSIXProcessHandle
+        do {
+            process = try POSIXProcessHandle.spawn(
+                command: command,
+                environment: invocation.environment,
+                pipes: pipes
+            )
+        } catch {
+            pipes.closeAll()
+            let failure: TranscriptionFailure
+            if command.isolationHandshakeDescriptor != nil {
+                failure = .isolationUnavailable(
+                    "Unable to launch sandbox wrapper: \(error.localizedDescription)"
+                )
+            } else {
+                failure = .helperLaunch(error.localizedDescription)
+            }
+            finishBeforeSpawn(with: failure)
+            return
         }
+
+        pipes.closeChildEndsInParent()
+        lock.lock()
+        self.process = process
+        processStarted = true
         let mustCancel = cancellationRequested
         lock.unlock()
 
-        startWorkers()
+        startWorkers(pipes: pipes, process: process)
+        startTimeout()
         if mustCancel {
-            beginTermination(.cancellation)
+            requestTermination(.cancellation, generation: generation)
         }
     }
 
-    private func configureNonblockingIO() throws {
-        for descriptor in [
-            stdin.fileHandleForReading.fileDescriptor,
-            stdin.fileHandleForWriting.fileDescriptor,
-            stdout.fileHandleForReading.fileDescriptor,
-            stdout.fileHandleForWriting.fileDescriptor,
-            stderr.fileHandleForReading.fileDescriptor,
-            stderr.fileHandleForWriting.fileDescriptor,
-        ] {
-            try setCloseOnExec(descriptor)
-        }
-        try setNonblocking(stdin.fileHandleForWriting.fileDescriptor)
-        try setNonblocking(stdout.fileHandleForReading.fileDescriptor)
-        try setNonblocking(stderr.fileHandleForReading.fileDescriptor)
-        guard fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
-            throw POSIXIOError(operation: "fcntl(F_SETNOSIGPIPE)", code: errno)
-        }
-    }
-
-    private func setCloseOnExec(_ descriptor: Int32) throws {
-        let flags = fcntl(descriptor, F_GETFD)
-        guard flags != -1,
-            fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) != -1
-        else {
-            throw POSIXIOError(operation: "fcntl(FD_CLOEXEC)", code: errno)
-        }
-    }
-
-    private func setNonblocking(_ descriptor: Int32) throws {
-        let flags = fcntl(descriptor, F_GETFL)
-        guard flags != -1,
-            fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) != -1
-        else {
-            throw POSIXIOError(operation: "fcntl(O_NONBLOCK)", code: errno)
-        }
-    }
-
-    private func startWorkers() {
-        let stdinDescriptor = stdin.fileHandleForWriting.fileDescriptor
-        let stdoutDescriptor = stdout.fileHandleForReading.fileDescriptor
-        let stderrDescriptor = stderr.fileHandleForReading.fileDescriptor
-
+    private func startWorkers(
+        pipes: ProcessPipeSet,
+        process: POSIXProcessHandle
+    ) {
+        let currentGeneration = generation
         Thread.detachNewThread {
-            self.writeRequest(to: stdinDescriptor)
+            ProcessIOWorkers.writeRequest(
+                self.invocation.request,
+                to: pipes.stdin.writeEnd,
+                state: {
+                    self.inputWorkerState(generation: currentGeneration)
+                },
+                didExit: { failed, incomplete in
+                    self.inputWorkerDidExit(
+                        failed: failed,
+                        incomplete: incomplete,
+                        generation: currentGeneration
+                    )
+                }
+            )
         }
         Thread.detachNewThread {
-            self.readStream(.stdout, from: stdoutDescriptor)
+            ProcessIOWorkers.readOutput(
+                from: pipes.stdout.readEnd,
+                shouldContinue: {
+                    self.outputWorkerShouldContinue(
+                        generation: currentGeneration
+                    )
+                },
+                consume: { data in
+                    self.append(
+                        data,
+                        to: .stdout,
+                        generation: currentGeneration
+                    )
+                },
+                didExit: {
+                    self.outputWorkerDidExit(
+                        .stdout,
+                        generation: currentGeneration
+                    )
+                }
+            )
         }
         Thread.detachNewThread {
-            self.readStream(.stderr, from: stderrDescriptor)
+            ProcessIOWorkers.readOutput(
+                from: pipes.stderr.readEnd,
+                shouldContinue: {
+                    self.outputWorkerShouldContinue(
+                        generation: currentGeneration
+                    )
+                },
+                consume: { data in
+                    self.append(
+                        data,
+                        to: .stderr,
+                        generation: currentGeneration
+                    )
+                },
+                didExit: {
+                    self.outputWorkerDidExit(
+                        .stderr,
+                        generation: currentGeneration
+                    )
+                }
+            )
         }
+        if let handshake = pipes.isolationHandshake {
+            Thread.detachNewThread {
+                ProcessIOWorkers.readIsolationHandshake(
+                    from: handshake.readEnd,
+                    shouldContinue: {
+                        self.isolationWorkerShouldContinue(
+                            generation: currentGeneration
+                        )
+                    },
+                    didExit: { _, failed in
+                        self.isolationWorkerDidExit(
+                            failed: failed,
+                            generation: currentGeneration
+                        )
+                    }
+                )
+            }
+        }
+        Thread.detachNewThread {
+            self.waitForDirectProcess(process, generation: currentGeneration)
+        }
+    }
+
+    private func startTimeout() {
+        let currentGeneration = generation
         let timer = Task.detached {
             do {
                 try await ContinuousClock().sleep(for: self.invocation.timeout)
             } catch {
                 return
             }
-            self.timeoutExpired()
+            self.timeoutExpired(generation: currentGeneration)
         }
         lock.lock()
-        if didFinish || terminationCause != nil || processExited {
-            timer.cancel()
-        } else {
+        if generationIsValid, !didFinish, !directProcessExited {
             timeoutTask = timer
+        } else {
+            timer.cancel()
         }
         lock.unlock()
     }
 
-    private func writeRequest(to descriptor: Int32) {
-        var offset = 0
-        let request = invocation.request
-        while offset < request.count {
-            guard shouldContinueWriting else {
-                writerDidFinish(
-                    error: processHasExited
-                        ? POSIXIOError(operation: "write", code: EPIPE)
-                        : nil
-                )
-                return
-            }
-            let written = request.withUnsafeBytes { bytes -> Int in
-                guard let baseAddress = bytes.baseAddress else {
-                    return 0
-                }
-                return Darwin.write(
-                    descriptor,
-                    baseAddress.advanced(by: offset),
-                    request.count - offset
-                )
-            }
-            if written > 0 {
-                offset += written
-                continue
-            }
-            if written == -1, errno == EINTR {
-                continue
-            }
-            if written == -1, errno == EAGAIN || errno == EWOULDBLOCK {
-                usleep(2_000)
-                continue
-            }
-            let code = written == -1 ? errno : EPIPE
-            writerDidFinish(error: POSIXIOError(operation: "write", code: code))
-            return
-        }
-        closeStdin()
-        writerDidFinish(error: nil)
-    }
-
-    private func readStream(_ stream: Stream, from descriptor: Int32) {
-        var buffer = [UInt8](repeating: 0, count: 4 * 1024)
-        while shouldContinueReading(stream) {
-            let count = buffer.withUnsafeMutableBytes { bytes in
-                Darwin.read(descriptor, bytes.baseAddress, bytes.count)
-            }
-            if count > 0 {
-                let keepReading = consume(
-                    Data(buffer.prefix(count)),
-                    from: stream
-                )
-                if !keepReading {
-                    return
-                }
-                continue
-            }
-            if count == 0 {
-                readerDidFinish(stream)
-                return
-            }
-            if errno == EINTR {
-                continue
-            }
-            if errno == EAGAIN || errno == EWOULDBLOCK {
-                usleep(2_000)
-                continue
-            }
-            readerDidFinish(stream)
-            return
+    private func waitForDirectProcess(
+        _ process: POSIXProcessHandle,
+        generation: UUID
+    ) {
+        do {
+            try process.waitUntilExitIsObservable()
+            directProcessDidExit(generation: generation)
+            reapSemaphore.wait()
+            let status = try process.reap()
+            directProcessDidReap(
+                status: status,
+                generation: generation
+            )
+        } catch {
+            requestTermination(
+                .lifecycleFailure(error.localizedDescription),
+                generation: generation
+            )
+            directProcessDidReapAfterWaitFailure(
+                status: (try? process.reap()) ?? 0,
+                generation: generation
+            )
         }
     }
 
-    private func consume(_ data: Data, from stream: Stream) -> Bool {
-        detectOwnedProcessGroup()
-        var violation: String?
-        var closeStream = false
+    private func inputWorkerState(generation: UUID) -> (
+        stop: Bool,
+        directProcessExited: Bool
+    ) {
         lock.lock()
-        guard !didFinish else {
+        defer { lock.unlock() }
+        guard generationIsValid, self.generation == generation else {
+            return (true, false)
+        }
+        return (stopInput, directProcessExited)
+    }
+
+    private func outputWorkerShouldContinue(generation: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generationIsValid
+            && self.generation == generation
+            && !stopOutputs
+    }
+
+    private func isolationWorkerShouldContinue(generation: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generationIsValid
+            && self.generation == generation
+            && !stopIsolation
+    }
+
+    private func append(
+        _ data: Data,
+        to stream: ProcessOutputStream,
+        generation: UUID
+    ) -> Bool {
+        var violation: String?
+        lock.lock()
+        guard generationIsValid, self.generation == generation else {
             lock.unlock()
             return false
         }
@@ -265,116 +305,285 @@ final class ProcessExecution: @unchecked Sendable {
             let remaining = max(0, maximum - stdoutData.count)
             stdoutData.append(data.prefix(remaining))
             if data.count > remaining {
-                stdoutFinished = true
                 violation = "stdout exceeded \(maximum) bytes"
-                closeStream = true
-            } else if let newline = stdoutData.firstIndex(of: 0x0A) {
-                if newline != stdoutData.index(before: stdoutData.endIndex) {
-                    violation = "Expected exactly one response line"
-                }
-                stdoutFinished = true
-                closeStream = true
             }
         case .stderr:
             let maximum = invocation.limits.maximumStderrBytes
             let remaining = max(0, maximum - stderrData.count)
             stderrData.append(data.prefix(remaining))
             if data.count > remaining {
-                stderrFinished = true
                 violation = "stderr exceeded \(maximum) bytes"
-                closeStream = true
             }
         }
         lock.unlock()
-
-        if closeStream {
-            close(stream)
-        }
         if let violation {
-            beginTermination(.protocolViolation(violation))
-            return false
-        }
-        if closeStream {
-            maybeFinish()
+            requestTermination(
+                .protocolViolation(violation),
+                generation: generation
+            )
             return false
         }
         return true
     }
 
-    private var shouldContinueWriting: Bool {
+    private func inputWorkerDidExit(
+        failed: Bool,
+        incomplete: Bool,
+        generation: UUID
+    ) {
         lock.lock()
-        defer { lock.unlock() }
-        return !didFinish && terminationCause == nil && !processExited
-    }
-
-    private var processHasExited: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return processExited
-    }
-
-    private func shouldContinueReading(_ stream: Stream) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !didFinish else {
-            return false
-        }
-        switch stream {
-        case .stdout:
-            return !stdoutFinished
-        case .stderr:
-            return !stderrFinished
-        }
-    }
-
-    private func writerDidFinish(error: Error?) {
-        var shouldTerminate = false
-        lock.lock()
-        guard !writerFinished else {
+        guard generationIsValid, self.generation == generation else {
             lock.unlock()
             return
         }
-        writerFinished = true
-        if error != nil, terminationCause == nil {
-            shouldTerminate = true
-        }
+        stdinWorkerExited = true
         lock.unlock()
-        closeStdin()
-        if shouldTerminate {
-            beginTermination(.writeFailure)
-        } else {
-            maybeFinish()
+        observer.processLifecycleDidEmit(.stdinWorkerExited)
+        if failed || (incomplete && !terminationIsAlreadyRequested) {
+            requestTermination(.writeFailure, generation: generation)
         }
+        workerStateDidChange()
     }
 
-    private func readerDidFinish(_ stream: Stream) {
+    private func outputWorkerDidExit(
+        _ stream: ProcessOutputStream,
+        generation: UUID
+    ) {
         lock.lock()
+        guard generationIsValid, self.generation == generation else {
+            lock.unlock()
+            return
+        }
         switch stream {
         case .stdout:
-            stdoutFinished = true
+            stdoutWorkerExited = true
         case .stderr:
-            stderrFinished = true
+            stderrWorkerExited = true
         }
         lock.unlock()
-        close(stream)
+        observer.processLifecycleDidEmit(
+            stream == .stdout ? .stdoutWorkerExited : .stderrWorkerExited
+        )
+        workerStateDidChange()
+    }
+
+    private func isolationWorkerDidExit(
+        failed: Bool,
+        generation: UUID
+    ) {
+        lock.lock()
+        guard generationIsValid, self.generation == generation else {
+            lock.unlock()
+            return
+        }
+        isolationWorkerExited = true
+        let alreadyTerminating = terminationCause != nil
+        lock.unlock()
+        observer.processLifecycleDidEmit(.isolationWorkerExited)
+        if failed, !alreadyTerminating {
+            requestTermination(.isolationFailure, generation: generation)
+        }
+        workerStateDidChange()
+    }
+
+    private var terminationIsAlreadyRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminationCause != nil
+    }
+
+    private func directProcessDidExit(generation: UUID) {
+        var timer: Task<Void, Never>?
+        var schedulePostExitCleanup = false
+        lock.lock()
+        guard generationIsValid, self.generation == generation else {
+            lock.unlock()
+            return
+        }
+        directProcessExited = true
+        timer = timeoutTask
+        timeoutTask = nil
+        if !stopOutputs,
+            (!stdoutWorkerExited || !stderrWorkerExited),
+            !postExitCleanupWasReserved
+        {
+            postExitCleanupWasReserved = true
+            schedulePostExitCleanup = true
+        }
+        lock.unlock()
+        timer?.cancel()
+        observer.processLifecycleDidEmit(.directProcessExited)
+        if schedulePostExitCleanup {
+            schedulePostExitCleanupTask(generation: generation)
+        }
+        workerStateDidChange()
+    }
+
+    private func directProcessDidReap(status: Int32, generation: UUID) {
+        lock.lock()
+        guard generationIsValid, self.generation == generation else {
+            lock.unlock()
+            return
+        }
+        directProcessReaped = true
+        exitCode = Self.exitCode(fromWaitStatus: status)
+        lock.unlock()
         maybeFinish()
     }
 
-    private func didExit(status: Int32) {
+    private func directProcessDidReapAfterWaitFailure(
+        status: Int32,
+        generation: UUID
+    ) {
         lock.lock()
-        guard !processExited else {
+        guard generationIsValid, self.generation == generation else {
             lock.unlock()
             return
         }
-        processExited = true
-        exitCode = status
-        let timer = timeoutTask
-        timeoutTask = nil
+        directProcessExited = true
+        directProcessReaped = true
+        exitCode = Self.exitCode(fromWaitStatus: status)
+        stopInput = true
+        stopOutputs = true
+        stopIsolation = true
         lock.unlock()
-        timer?.cancel()
-        closeStdin()
+        observer.processLifecycleDidEmit(.directProcessExited)
+        maybeFinish()
+    }
 
-        let drain = Task.detached {
+    private func workerStateDidChange() {
+        var allowReap = false
+        lock.lock()
+        if generationIsValid,
+            directProcessExited,
+            stdinWorkerExited,
+            stdoutWorkerExited,
+            stderrWorkerExited,
+            isolationWorkerExited,
+            (!escalationWasReserved || escalationDidFire),
+            !reapWasAllowed
+        {
+            reapWasAllowed = true
+            allowReap = true
+        }
+        lock.unlock()
+        if allowReap {
+            reapSemaphore.signal()
+        }
+        maybeFinish()
+    }
+
+    private func timeoutExpired(generation: UUID) {
+        requestTermination(.timeout, generation: generation)
+    }
+
+    private func cancel() {
+        lock.lock()
+        cancellationRequested = true
+        let started = processStarted
+        let currentGeneration = generation
+        lock.unlock()
+        if started {
+            requestTermination(.cancellation, generation: currentGeneration)
+        }
+    }
+
+    private func requestTermination(_ cause: TerminationCause, generation: UUID) {
+        var sendSIGTERM = false
+        var scheduleEscalation = false
+        var timer: Task<Void, Never>?
+        lock.lock()
+        guard generationIsValid, self.generation == generation, !didFinish else {
+            lock.unlock()
+            return
+        }
+        if case .cancellation = cause {
+            terminationCause = .cancellation
+        } else if terminationCause == nil {
+            terminationCause = cause
+        }
+        stopInput = true
+        switch cause {
+        case .cancellation, .timeout, .protocolViolation:
+            stopOutputs = true
+            stopIsolation = true
+        case .isolationFailure:
+            stopIsolation = true
+        case .writeFailure, .lifecycleFailure:
+            break
+        }
+        timer = timeoutTask
+        timeoutTask = nil
+        if !sigtermWasSent, process != nil {
+            sigtermWasSent = true
+            sendSIGTERM = true
+        }
+        if !escalationWasReserved, process != nil {
+            escalationWasReserved = true
+            scheduleEscalation = true
+        }
+        lock.unlock()
+
+        timer?.cancel()
+        if sendSIGTERM {
+            signalProcessGroup(SIGTERM, generation: generation)
+        }
+        if scheduleEscalation {
+            scheduleEscalationTask(generation: generation)
+        }
+    }
+
+    private func scheduleEscalationTask(generation: UUID) {
+        let task = Task.detached {
+            do {
+                try await ContinuousClock().sleep(
+                    for: self.invocation.limits.terminationGrace
+                )
+            } catch {
+                return
+            }
+            self.forceKill(generation: generation)
+        }
+        lock.lock()
+        if generationIsValid,
+            self.generation == generation,
+            escalationWasReserved,
+            escalationTask == nil
+        {
+            escalationTask = task
+        } else {
+            task.cancel()
+        }
+        lock.unlock()
+    }
+
+    private func forceKill(generation: UUID) {
+        var didAttempt = false
+        lock.lock()
+        guard generationIsValid,
+            self.generation == generation,
+            escalationWasReserved,
+            !escalationDidFire,
+            !didFinish,
+            let process
+        else {
+            lock.unlock()
+            return
+        }
+        escalationDidFire = true
+        process.signalGroup(SIGKILL)
+        didAttempt = true
+        lock.unlock()
+        if didAttempt {
+            observer.processLifecycleDidEmit(
+                .signal(generation: generation, signal: SIGKILL)
+            )
+        }
+        workerStateDidChange()
+    }
+
+    private func schedulePostExitCleanupTask(generation: UUID) {
+        let task = Task.detached {
             do {
                 try await ContinuousClock().sleep(
                     for: self.invocation.limits.postExitPipeDrainGrace
@@ -382,151 +591,77 @@ final class ProcessExecution: @unchecked Sendable {
             } catch {
                 return
             }
-            self.endPostExitDrain()
+            self.cleanUpExitedProcessGroup(generation: generation)
         }
         lock.lock()
-        if didFinish {
-            drain.cancel()
+        if generationIsValid,
+            self.generation == generation,
+            postExitCleanupWasReserved,
+            postExitCleanupTask == nil
+        {
+            postExitCleanupTask = task
         } else {
-            pipeDrainTask = drain
+            task.cancel()
         }
         lock.unlock()
-        maybeFinish()
     }
 
-    private func endPostExitDrain() {
-        var killOwnedGroup = false
+    private func cleanUpExitedProcessGroup(generation: UUID) {
+        var didAttempt = false
         lock.lock()
-        killOwnedGroup =
-            ownedProcessGroupID != nil && (!stdoutFinished || !stderrFinished)
-        stdoutFinished = true
-        stderrFinished = true
-        pipeDrainTask = nil
-        lock.unlock()
-        if killOwnedGroup {
-            signalOwnedProcess(SIGKILL, includeExitedGroup: true)
+        if generationIsValid,
+            self.generation == generation,
+            !didFinish,
+            (!stdoutWorkerExited || !stderrWorkerExited),
+            let process
+        {
+            process.signalGroup(SIGKILL)
+            didAttempt = true
         }
-        closeStdout()
-        closeStderr()
-        maybeFinish()
-    }
-
-    private func timeoutExpired() {
-        beginTermination(.timeout)
-    }
-
-    private func cancel() {
-        lock.lock()
-        cancellationRequested = true
-        let started = processStarted
         lock.unlock()
-        if started {
-            beginTermination(.cancellation)
+        if didAttempt {
+            observer.processLifecycleDidEmit(
+                .signal(generation: generation, signal: SIGKILL)
+            )
         }
     }
 
-    private func beginTermination(_ cause: TerminationCause) {
-        var shouldSignal = false
-        var shouldScheduleEscalation = false
-        var timer: Task<Void, Never>?
+    private func signalProcessGroup(_ signal: Int32, generation: UUID) {
+        var didAttempt = false
         lock.lock()
-        if case .cancellation = cause {
-            terminationCause = .cancellation
-        } else if terminationCause == nil {
-            terminationCause = cause
-        }
-        if !didFinish {
-            timer = timeoutTask
-            timeoutTask = nil
-            shouldSignal = !processExited
-            shouldScheduleEscalation = escalationTask == nil
-            stdoutFinished = true
-            stderrFinished = true
+        if generationIsValid,
+            self.generation == generation,
+            !didFinish,
+            let process
+        {
+            process.signalGroup(signal)
+            didAttempt = true
         }
         lock.unlock()
-
-        timer?.cancel()
-        closeStdin()
-        closeStdout()
-        closeStderr()
-        if shouldSignal {
-            signalOwnedProcess(SIGTERM, includeExitedGroup: false)
+        if didAttempt {
+            observer.processLifecycleDidEmit(
+                .signal(generation: generation, signal: signal)
+            )
         }
-        if shouldScheduleEscalation {
-            let escalation = Task.detached {
-                do {
-                    try await ContinuousClock().sleep(
-                        for: self.invocation.limits.terminationGrace
-                    )
-                } catch {
-                    return
-                }
-                self.forceKill()
-            }
-            lock.lock()
-            if didFinish {
-                escalation.cancel()
-            } else {
-                escalationTask = escalation
-            }
-            lock.unlock()
-        }
-        maybeFinish()
-    }
-
-    private func forceKill() {
-        signalOwnedProcess(SIGKILL, includeExitedGroup: true)
-        lock.lock()
-        escalationTask = nil
-        lock.unlock()
-        maybeFinish()
-    }
-
-    private func signalOwnedProcess(_ signal: Int32, includeExitedGroup: Bool) {
-        detectOwnedProcessGroup()
-        lock.lock()
-        let pid = processID
-        let groupID = ownedProcessGroupID
-        let exited = processExited
-        lock.unlock()
-        if let groupID, includeExitedGroup || !exited {
-            _ = Darwin.kill(-groupID, signal)
-        } else if let pid, !exited {
-            _ = Darwin.kill(pid, signal)
-        }
-    }
-
-    private func detectOwnedProcessGroup() {
-        lock.lock()
-        guard ownedProcessGroupID == nil, let pid = processID, !processExited else {
-            lock.unlock()
-            return
-        }
-        lock.unlock()
-        guard getpgid(pid) == pid else {
-            return
-        }
-        lock.lock()
-        if !processExited {
-            ownedProcessGroupID = pid
-        }
-        lock.unlock()
     }
 
     private func maybeFinish() {
         var result: Result<HelperProcessOutput, Error>?
         var continuation: CheckedContinuation<HelperProcessOutput, Error>?
-        var timeout: Task<Void, Never>?
+        var timer: Task<Void, Never>?
         var escalation: Task<Void, Never>?
-        var drain: Task<Void, Never>?
+        var postExitCleanup: Task<Void, Never>?
         lock.lock()
-        if !didFinish,
-            processExited,
-            writerFinished,
-            stdoutFinished,
-            stderrFinished
+        if generationIsValid,
+            !didFinish,
+            directProcessReaped,
+            stdinWorkerExited,
+            stdoutWorkerExited,
+            stderrWorkerExited,
+            isolationWorkerExited
         {
             didFinish = true
+            generationIsValid = false
             let stderrText = String(decoding: stderrData, as: UTF8.self)
             switch terminationCause {
             case .cancellation:
@@ -547,6 +682,16 @@ final class ProcessExecution: @unchecked Sendable {
                         stderr: stderrText
                     )
                 )
+            case .isolationFailure:
+                result = .failure(
+                    TranscriptionFailure.isolationUnavailable(
+                        stderrText.isEmpty
+                            ? "Network sandbox failed before helper launch"
+                            : stderrText
+                    )
+                )
+            case .lifecycleFailure(let message):
+                result = .failure(TranscriptionFailure.helperLaunch(message))
             case nil:
                 result = .success(
                     HelperProcessOutput(
@@ -558,91 +703,45 @@ final class ProcessExecution: @unchecked Sendable {
             }
             continuation = self.continuation
             self.continuation = nil
-            timeout = timeoutTask
+            timer = timeoutTask
             timeoutTask = nil
             escalation = escalationTask
             escalationTask = nil
-            drain = pipeDrainTask
-            pipeDrainTask = nil
+            postExitCleanup = postExitCleanupTask
+            postExitCleanupTask = nil
         }
         lock.unlock()
 
         guard let result, let continuation else {
             return
         }
-        timeout?.cancel()
+        timer?.cancel()
         escalation?.cancel()
-        drain?.cancel()
-        closeAllHandles()
+        postExitCleanup?.cancel()
+        observer.processLifecycleDidEmit(.willResume)
         continuation.resume(with: result)
     }
 
-    private func finishBeforeLaunch(with error: Error) {
+    private func finishBeforeSpawn(with error: Error) {
         lock.lock()
         guard !didFinish else {
             lock.unlock()
             return
         }
         didFinish = true
+        generationIsValid = false
         let continuation = self.continuation
         self.continuation = nil
         lock.unlock()
+        observer.processLifecycleDidEmit(.willResume)
         continuation?.resume(throwing: error)
     }
 
-    private func close(_ stream: Stream) {
-        switch stream {
-        case .stdout:
-            closeStdout()
-        case .stderr:
-            closeStderr()
+    private static func exitCode(fromWaitStatus status: Int32) -> Int32 {
+        let terminationSignal = status & 0x7f
+        if terminationSignal == 0 {
+            return (status >> 8) & 0xff
         }
+        return 128 + terminationSignal
     }
-
-    private func closeStdin() {
-        lock.lock()
-        guard !stdinClosed else {
-            lock.unlock()
-            return
-        }
-        stdinClosed = true
-        lock.unlock()
-        try? stdin.fileHandleForWriting.close()
-    }
-
-    private func closeStdout() {
-        lock.lock()
-        guard !stdoutClosed else {
-            lock.unlock()
-            return
-        }
-        stdoutClosed = true
-        lock.unlock()
-        try? stdout.fileHandleForReading.close()
-    }
-
-    private func closeStderr() {
-        lock.lock()
-        guard !stderrClosed else {
-            lock.unlock()
-            return
-        }
-        stderrClosed = true
-        lock.unlock()
-        try? stderr.fileHandleForReading.close()
-    }
-
-    private func closeAllHandles() {
-        closeStdin()
-        closeStdout()
-        closeStderr()
-        try? stdin.fileHandleForReading.close()
-        try? stdout.fileHandleForWriting.close()
-        try? stderr.fileHandleForWriting.close()
-    }
-}
-
-private struct POSIXIOError: Error {
-    let operation: String
-    let code: Int32
 }
