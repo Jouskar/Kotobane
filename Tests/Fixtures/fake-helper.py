@@ -7,6 +7,12 @@ import sys
 import time
 
 
+try:
+    os.setpgid(0, 0)
+except PermissionError:
+    pass
+
+
 def completed(request):
     return {
         "id": request["id"],
@@ -17,10 +23,35 @@ def completed(request):
     }
 
 
+forced_mode = sys.argv[1] if len(sys.argv) > 1 else None
+forced_marker = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+
+if forced_mode == "exit-before-read-once" and forced_marker is not None:
+    if not forced_marker.exists():
+        with forced_marker.open("a", encoding="utf-8") as handle:
+            handle.write(f"{os.getpid()}\n")
+        raise SystemExit(17)
+elif forced_mode == "non-reading" and forced_marker is not None:
+    with forced_marker.open("a", encoding="utf-8") as handle:
+        handle.write(f"{os.getpid()}\n")
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+
 line = sys.stdin.readline()
 request = json.loads(line)
 audio_path = Path(request["audioPath"])
-mode = audio_path.stem
+mode = forced_mode or audio_path.stem
+
+if mode in {
+    "cancel-hostile",
+    "hostile-timeout",
+    "oversized-stdout",
+    "oversized-stderr",
+}:
+    marker = Path(str(audio_path) + ".pids")
+    with marker.open("a", encoding="utf-8") as handle:
+        handle.write(f"{os.getpid()}\n")
 
 if mode == "timeout":
     marker = Path(str(audio_path) + ".terminated")
@@ -33,6 +64,24 @@ if mode == "timeout":
     signal.signal(signal.SIGTERM, terminate)
     while True:
         time.sleep(1)
+elif mode in {"cancel-hostile", "hostile-timeout"}:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+elif mode == "oversized-stdout":
+    print("x" * 2048, flush=True)
+elif mode == "oversized-stderr":
+    print("x" * 2048, file=sys.stderr, flush=True)
+    print(json.dumps(completed(request), sort_keys=True), flush=True)
+elif mode == "descendant-held-pipe":
+    child = os.fork()
+    if child == 0:
+        marker = Path(str(audio_path) + ".descendant-pid")
+        with marker.open("w", encoding="utf-8") as handle:
+            handle.write(f"{os.getpid()}\n")
+        time.sleep(1.5)
+        os._exit(0)
+    print(json.dumps(completed(request), sort_keys=True), flush=True)
 elif mode == "crash":
     print("fixture crash", file=sys.stderr, flush=True)
     raise SystemExit(17)

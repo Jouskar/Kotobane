@@ -96,3 +96,47 @@ import Testing
         try HelperCodec.decode(line, expectedID: id)
     }
 }
+
+@Test(arguments: [
+    ("audioPath", "/private/tmp/audio.wav", "tr", "small"),
+    ("language", "/a", "Turkish language", "small"),
+    ("model", "/a", "tr", "qwen3-asr-0.6b"),
+])
+func requestFieldsHaveUTF8ByteLimits(
+    _ field: String,
+    audioPath: String,
+    language: String,
+    model: String
+) {
+    let request = HelperRequest(
+        id: UUID(),
+        action: "transcribe",
+        audioPath: audioPath,
+        language: language,
+        model: model
+    )
+    let limits = HelperProcessLimits(
+        maximumAudioPathBytes: 8,
+        maximumLanguageBytes: 8,
+        maximumModelBytes: 8
+    )
+
+    #expect(throws: HelperCodecError.fieldTooLarge(field: field, maximumBytes: 8)) {
+        try HelperCodec.encode(request, limits: limits)
+    }
+}
+
+@Test func encodedRequestHasATotalByteLimit() {
+    let request = HelperRequest(
+        id: UUID(),
+        action: "transcribe",
+        audioPath: "/tmp/a.wav",
+        language: "tr",
+        model: "small"
+    )
+    let limits = HelperProcessLimits(maximumRequestBytes: 32)
+
+    #expect(throws: HelperCodecError.requestTooLarge(maximumBytes: 32)) {
+        try HelperCodec.encode(request, limits: limits)
+    }
+}

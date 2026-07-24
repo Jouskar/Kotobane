@@ -62,10 +62,30 @@ public enum HelperCodecError: Error, Equatable, Sendable {
     case malformedResponse
     case unknownStatus(String)
     case mismatchedID(expected: UUID, actual: UUID)
+    case fieldTooLarge(field: String, maximumBytes: Int)
+    case requestTooLarge(maximumBytes: Int)
 }
 
 public enum HelperCodec {
-    public static func encode(_ request: HelperRequest) throws -> String {
+    public static func encode(
+        _ request: HelperRequest,
+        limits: HelperProcessLimits = .init()
+    ) throws -> String {
+        try validate(
+            request.audioPath,
+            field: "audioPath",
+            maximumBytes: limits.maximumAudioPathBytes
+        )
+        try validate(
+            request.language,
+            field: "language",
+            maximumBytes: limits.maximumLanguageBytes
+        )
+        try validate(
+            request.model,
+            field: "model",
+            maximumBytes: limits.maximumModelBytes
+        )
         let envelope = EncodedRequest(
             id: request.id.uuidString.lowercased(),
             action: request.action,
@@ -82,7 +102,13 @@ public enum HelperCodec {
                 .init(codingPath: [], debugDescription: "JSON was not valid UTF-8")
             )
         }
-        return json + "\n"
+        let line = json + "\n"
+        guard line.utf8.count <= limits.maximumRequestBytes else {
+            throw HelperCodecError.requestTooLarge(
+                maximumBytes: limits.maximumRequestBytes
+            )
+        }
+        return line
     }
 
     public static func decode(_ line: Data, expectedID: UUID) throws -> HelperResponse {
@@ -124,6 +150,19 @@ public enum HelperCodec {
             }
         default:
             throw HelperCodecError.unknownStatus(envelope.status)
+        }
+    }
+
+    private static func validate(
+        _ value: String,
+        field: String,
+        maximumBytes: Int
+    ) throws {
+        guard value.utf8.count <= maximumBytes else {
+            throw HelperCodecError.fieldTooLarge(
+                field: field,
+                maximumBytes: maximumBytes
+            )
         }
     }
 }

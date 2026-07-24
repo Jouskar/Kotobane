@@ -111,10 +111,11 @@ protocol errors.
 
 The helper canonicalizes the supplied audio path and rejects any path outside
 Kotobane's Application Support directory. It uses no listening port and makes
-no network request during transcription. The process receives an environment
-that enables offline model loading. On a crash or timeout, the engine preserves
-the recording, restarts the helper once, and then returns actionable
-diagnostics.
+no network request during transcription. The production launcher installs an
+explicit macOS deny-network sandbox around each helper process and fails closed
+if that boundary is unavailable. The process also receives an environment that
+enables offline model loading. On a crash or timeout, the engine preserves the
+recording, restarts the helper once, and then returns actionable diagnostics.
 
 The Python helper is installed into an app-managed virtual environment by an
 explicit setup command. Its dependency versions are pinned. The helper reports

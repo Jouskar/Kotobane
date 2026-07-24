@@ -37,6 +37,8 @@ public struct TranscriptionResult: Equatable, Sendable {
 
 public enum TranscriptionFailure: Error, Equatable, Sendable {
     case invalidAudioPath(URL)
+    case invalidRequest(String)
+    case isolationUnavailable(String)
     case helperLaunch(String)
     case helperCrashed(exitCode: Int32, stderr: String)
     case unexpectedEOF(stderr: String)
@@ -48,7 +50,8 @@ public enum TranscriptionFailure: Error, Equatable, Sendable {
         switch self {
         case .helperCrashed, .unexpectedEOF, .timedOut:
             true
-        case .invalidAudioPath, .helperLaunch, .protocolViolation, .helperRejected:
+        case .invalidAudioPath, .invalidRequest, .isolationUnavailable,
+            .helperLaunch, .protocolViolation, .helperRejected:
             false
         }
     }

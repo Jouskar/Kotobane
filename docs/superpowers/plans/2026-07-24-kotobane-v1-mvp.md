@@ -400,6 +400,8 @@ git commit -m "feat: persist captures and settings atomically"
 - Create: `Sources/KotobaneCore/Transcription/TranscriptionEngine.swift`
 - Create: `Sources/KotobaneCore/Transcription/HelperProtocol.swift`
 - Create: `Sources/KotobaneCore/Transcription/MLXHelperEngine.swift`
+- Create: `Sources/KotobaneCore/Transcription/FoundationProcessLauncher.swift`
+- Create: `Sources/KotobaneCore/Transcription/ProcessExecution.swift`
 - Create: `Tests/KotobaneCoreTests/HelperProtocolTests.swift`
 - Create: `Tests/KotobaneCoreTests/MLXHelperEngineTests.swift`
 - Create: `Tests/Fixtures/fake-helper.py`
@@ -465,6 +467,12 @@ Canonicalize the audio URL and verify it is a descendant of `allowedAudioRoot`
 before launch. Use a task group to race the response against
 `ContinuousClock.sleep(for: timeout)`. Terminate and reap timed-out processes.
 Retry only crash, EOF, and timeout errors; do not retry model or input errors.
+The production Foundation launcher must fail closed unless it can invoke the
+helper through `/usr/bin/sandbox-exec` with an explicit profile that denies
+inbound and outbound network access. Offline environment variables are
+defense-in-depth configuration, not the network-isolation boundary. Tests may
+inject a no-op isolation strategy only because the outer test sandbox rejects
+nested `sandbox-exec`.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -973,6 +981,12 @@ Expected: failure because the packaging script does not exist.
    Resources/Kotobane.entitlements`; and
 8. verify with `codesign --verify --deep --strict`.
 
+`Resources/Kotobane.entitlements` must not grant network client or server
+access. This parent-app entitlement posture is defense in depth: the
+transcription child remains explicitly isolated by the Task 4
+`sandbox-exec` deny-network profile, and packaging must not replace that
+per-child boundary with environment variables or a future entitlement.
+
 `verify.sh` runs:
 
 ```bash
@@ -983,6 +997,11 @@ scripts/package-app.sh
 plutil -lint Resources/Info.plist
 codesign --verify --deep --strict dist/Kotobane.app
 ```
+
+The verification gate also runs the Task 4 production-isolation unit tests,
+which assert the exact `sandbox-exec` wrapper/profile and fail-closed
+classification, and inspects the signed entitlements to confirm that no network
+client/server keys were introduced.
 
 Choose the MIT License. Document Apple-silicon and macOS floors, Command Line
 Tools build steps, first-run model setup, disk-size display behavior, local data
