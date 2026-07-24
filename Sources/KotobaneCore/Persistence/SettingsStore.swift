@@ -2,22 +2,35 @@ import Foundation
 
 public struct SettingsStore {
     public let url: URL
-    private let fileManager: FileManager
     private let writer: AtomicFileWriter
+    private let pathGuard: StoragePathGuard
 
     public init(url: URL, fileManager: FileManager = .default) {
-        self.url = url
-        self.fileManager = fileManager
+        self.url = url.standardizedFileURL
         self.writer = AtomicFileWriter(fileManager: fileManager)
+        self.pathGuard = StoragePathGuard(
+            root: url.standardizedFileURL.deletingLastPathComponent(),
+            fileManager: fileManager
+        )
     }
 
     public func load() throws -> AppSettings {
-        guard fileManager.fileExists(atPath: url.path) else { return .defaults }
+        guard try validateURL() else { return .defaults }
         return try Self.decoder.decode(StoredSettings.self, from: Data(contentsOf: url)).appSettings
     }
 
     public func save(_ settings: AppSettings) throws {
+        try validateURL()
         try writer.write(try Self.encoder.encode(settings), to: url)
+    }
+
+    @discardableResult
+    private func validateURL() throws -> Bool {
+        do {
+            return try pathGuard.validate(url)
+        } catch StoragePathError.symbolicLink(let linkedURL) {
+            throw SettingsStoreError.symbolicLink(linkedURL)
+        }
     }
 
     private static let encoder: JSONEncoder = {
@@ -45,6 +58,9 @@ private struct StoredSettings: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(Int.self, forKey: .version)
+        guard version == 1 || version == AppSettings.currentVersion else {
+            throw SettingsStoreError.unsupportedVersion(version)
+        }
         languageHint = try container.decode(String.self, forKey: .languageHint)
         let rawModel = try container.decode(String.self, forKey: .model)
         guard let decodedModel = ModelChoice(rawValue: rawModel) ?? Self.legacyModel(named: rawModel) else {
@@ -57,7 +73,11 @@ private struct StoredSettings: Decodable {
         model = decodedModel
         audioRetention = try container.decode(AudioRetentionPolicy.self, forKey: .audioRetention)
         shortcut = try container.decode(Shortcut.self, forKey: .shortcut)
-        pasteAfterOpening = try container.decodeIfPresent(Bool.self, forKey: .pasteAfterOpening) ?? false
+        if version == 1 {
+            pasteAfterOpening = try container.decodeIfPresent(Bool.self, forKey: .pasteAfterOpening) ?? false
+        } else {
+            pasteAfterOpening = try container.decode(Bool.self, forKey: .pasteAfterOpening)
+        }
     }
 
     var appSettings: AppSettings {
@@ -78,4 +98,9 @@ private struct StoredSettings: Decodable {
         default: nil
         }
     }
+}
+
+public enum SettingsStoreError: Error, Equatable {
+    case symbolicLink(URL)
+    case unsupportedVersion(Int)
 }
