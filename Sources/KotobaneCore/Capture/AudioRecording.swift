@@ -59,6 +59,19 @@ public enum AudioRecorderError: Error, Equatable, Sendable {
     case writeFailed(String)
 }
 
+public struct AudioRecordingStopFailure: Error, Equatable, Sendable {
+    public let error: AudioRecorderError
+    public let partialRecording: AudioRecording?
+
+    public init(
+        error: AudioRecorderError,
+        partialRecording: AudioRecording?
+    ) {
+        self.error = error
+        self.partialRecording = partialRecording
+    }
+}
+
 @MainActor
 public protocol AudioRecordingManaging: AnyObject {
     func start(

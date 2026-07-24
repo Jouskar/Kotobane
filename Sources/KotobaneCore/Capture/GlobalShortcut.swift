@@ -28,6 +28,15 @@ public enum CarbonHotKeyModifiers {
 
 public protocol GlobalShortcutRegistration: AnyObject {}
 
+typealias CarbonRegisterEventHotKey = (
+    UInt32,
+    UInt32,
+    EventHotKeyID,
+    EventTargetRef?,
+    OptionBits,
+    UnsafeMutablePointer<EventHotKeyRef?>?
+) -> OSStatus
+
 @MainActor
 public protocol GlobalShortcutSystem: AnyObject {
     func register(
@@ -79,8 +88,17 @@ public final class CarbonGlobalShortcut: GlobalShortcutRegistering {
 @MainActor
 public final class CarbonGlobalShortcutSystem: GlobalShortcutSystem {
     private var nextID: UInt32 = 1
+    private let registerEventHotKey: CarbonRegisterEventHotKey
 
-    public init() {}
+    public init() {
+        registerEventHotKey = {
+            RegisterEventHotKey($0, $1, $2, $3, $4, $5)
+        }
+    }
+
+    init(registerEventHotKey: @escaping CarbonRegisterEventHotKey) {
+        self.registerEventHotKey = registerEventHotKey
+    }
 
     public func register(
         keyCode: UInt32,
@@ -125,12 +143,12 @@ public final class CarbonGlobalShortcutSystem: GlobalShortcutSystem {
         )
         nextID &+= 1
         var hotKey: EventHotKeyRef?
-        let hotKeyStatus = RegisterEventHotKey(
+        let hotKeyStatus = registerEventHotKey(
             keyCode,
             modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
-            0,
+            OptionBits(kEventHotKeyExclusive),
             &hotKey
         )
         guard hotKeyStatus == noErr, let hotKey else {

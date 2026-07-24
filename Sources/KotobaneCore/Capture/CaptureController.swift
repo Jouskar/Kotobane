@@ -122,6 +122,31 @@ public final class CaptureController {
         let recording: AudioRecording
         do {
             recording = try recorder.stop()
+        } catch let stopFailure as AudioRecordingStopFailure {
+            if let partialRecording = stopFailure.partialRecording,
+               partialRecording.frameCount > 0 {
+                self.operationID = nil
+                retryContext = .transcribe(partialRecording, captureID)
+                state = .failed(
+                    CaptureFailure(
+                        kind: .recordingFailed,
+                        recovery: .retryTranscription,
+                        message: "Recording stopped after an audio write error. Valid captured audio was preserved; retry transcription or export it.",
+                        preservedAudioURL: partialRecording.fileURL
+                    )
+                )
+            } else {
+                removeInvalidTemporaryAudio(at: temporaryURL)
+                self.operationID = nil
+                state = .failed(
+                    CaptureFailure(
+                        kind: recorderFailureKind(stopFailure.error),
+                        recovery: .retryRecording,
+                        message: failureMessage(stopFailure.error)
+                    )
+                )
+            }
+            return
         } catch {
             removeInvalidTemporaryAudio(at: temporaryURL)
             self.operationID = nil

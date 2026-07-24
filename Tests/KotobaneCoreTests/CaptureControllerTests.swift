@@ -120,6 +120,28 @@ import Testing
 }
 
 @MainActor
+@Test func lateRecorderFailurePreservesValidPartialAudioForActionableRetry() async throws {
+    let fixture = CaptureFixture(stopFailureAfterFrames: true)
+
+    await fixture.controller.start()
+    await fixture.controller.stop()
+
+    let failure = try #require(fixture.controller.state.failure)
+    #expect(failure.kind == .recordingFailed)
+    #expect(failure.recovery == .retryTranscription)
+    #expect(failure.preservedAudioURL == fixture.temporaryURL)
+    #expect(fixture.files.deletedURLs.isEmpty)
+    #expect(fixture.files.deleteAttempts == 0)
+    #expect(fixture.engine.callCount == 0)
+
+    await fixture.controller.retry()
+
+    #expect(fixture.controller.state.capture?.transcript == "Merhaba")
+    #expect(fixture.engine.callCount == 1)
+    #expect(fixture.files.deletedURLs == [fixture.temporaryURL])
+}
+
+@MainActor
 @Test func transcriptionFailurePreservesAudioAndRetryCanReachReview() async throws {
     let engine = ScriptedTranscriptionEngine([
         .failure(TranscriptionFailure.helperRejected(
@@ -368,6 +390,7 @@ private final class CaptureFixture {
         retention: AudioRetentionPolicy = .deleteAfterTranscription,
         startError: AudioRecorderError? = nil,
         frameCount: AVAudioFramePosition = 4_800,
+        stopFailureAfterFrames: Bool = false,
         engine suppliedEngine: (any FixtureTranscriptionEngine)? = nil,
         storeFailures: Int = 0,
         storeFailureCalls: Set<Int> = [],
@@ -385,7 +408,17 @@ private final class CaptureFixture {
                 frameCount: frameCount,
                 durationSeconds: 0.1
             ),
-            startError: startError
+            startError: startError,
+            stopFailure: stopFailureAfterFrames
+                ? AudioRecordingStopFailure(
+                    error: .writeFailed("Disk write failed after valid audio."),
+                    partialRecording: AudioRecording(
+                        fileURL: temporaryURL,
+                        frameCount: frameCount,
+                        durationSeconds: 0.1
+                    )
+                )
+                : nil
         )
         let engine = suppliedEngine ?? ScriptedTranscriptionEngine([
             .success(.fixture()),
@@ -472,6 +505,7 @@ private final class SpyAudioRecorder: AudioRecordingManaging {
     let events: CaptureEventLog
     let recording: AudioRecording
     var startError: AudioRecorderError?
+    let stopFailure: AudioRecordingStopFailure?
     private var update: (@Sendable (RecordingSnapshot) -> Void)?
     private(set) var startCount = 0
     private(set) var stopCount = 0
@@ -479,11 +513,13 @@ private final class SpyAudioRecorder: AudioRecordingManaging {
     init(
         events: CaptureEventLog,
         recording: AudioRecording,
-        startError: AudioRecorderError?
+        startError: AudioRecorderError?,
+        stopFailure: AudioRecordingStopFailure?
     ) {
         self.events = events
         self.recording = recording
         self.startError = startError
+        self.stopFailure = stopFailure
     }
 
     func start(
@@ -499,6 +535,7 @@ private final class SpyAudioRecorder: AudioRecordingManaging {
     func stop() throws -> AudioRecording {
         stopCount += 1
         events.append("record-stop")
+        if let stopFailure { throw stopFailure }
         return recording
     }
 

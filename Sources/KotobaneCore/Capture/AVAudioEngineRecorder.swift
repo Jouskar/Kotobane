@@ -214,15 +214,21 @@ private final class AudioTapSession: @unchecked Sendable {
     func finish() throws -> AudioRecording {
         try lock.withLock {
             finished = true
-            if let failure { throw failure }
             let duration = converter.outputFormat.sampleRate > 0
                 ? Double(frames) / converter.outputFormat.sampleRate
                 : 0
-            return AudioRecording(
+            let recording = AudioRecording(
                 fileURL: url,
                 frameCount: frames,
                 durationSeconds: duration
             )
+            if let failure {
+                throw AudioRecordingStopFailure(
+                    error: failure,
+                    partialRecording: frames > 0 ? recording : nil
+                )
+            }
+            return recording
         }
     }
 

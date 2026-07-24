@@ -35,6 +35,26 @@ import Testing
 }
 
 @MainActor
+@Test func carbonAdapterRequestsExclusiveRegistrationSoConflictsAreReported() {
+    var observedOptions: OptionBits?
+    let system = CarbonGlobalShortcutSystem(
+        registerEventHotKey: { _, _, _, _, options, _ in
+            observedOptions = options
+            return OSStatus(eventHotKeyExistsErr)
+        }
+    )
+
+    #expect(throws: GlobalShortcutError.conflict) {
+        _ = try system.register(
+            keyCode: 49,
+            modifiers: CarbonHotKeyModifiers.mask(for: [.control, .option]),
+            callback: {}
+        )
+    }
+    #expect(observedOptions == OptionBits(kEventHotKeyExclusive))
+}
+
+@MainActor
 @Test func reconfigurationReleasesPreviousHotKeyAndHandlerBeforeRegisteringNewOne() throws {
     let system = SpyGlobalShortcutSystem()
     let registrar = CarbonGlobalShortcut(system: system)
