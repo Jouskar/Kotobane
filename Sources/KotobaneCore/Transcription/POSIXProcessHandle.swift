@@ -117,8 +117,26 @@ struct POSIXProcessHandle: Sendable {
                 operation: "posix_spawn isolation dup2"
             )
         }
+        if let descriptor = command.execStatusDescriptor,
+            let status = pipes.execStatus
+        {
+            try checkPOSIX(
+                posix_spawn_file_actions_adddup2(
+                    &actions,
+                    status.writeEnd,
+                    descriptor
+                ),
+                operation: "posix_spawn exec status dup2"
+            )
+        }
+        let reservedDescriptors = Set(
+            [
+                command.isolationHandshakeDescriptor,
+                command.execStatusDescriptor,
+            ].compactMap { $0 }
+        )
         for descriptor in pipes.allDescriptors
-        where descriptor != command.isolationHandshakeDescriptor {
+        where !reservedDescriptors.contains(descriptor) {
             try checkPOSIX(
                 posix_spawn_file_actions_addclose(&actions, descriptor),
                 operation: "posix_spawn close"
@@ -168,8 +186,13 @@ struct ProcessPipeSet: Sendable {
     var stdout: ProcessPipePair
     var stderr: ProcessPipePair
     var isolationHandshake: ProcessPipePair?
+    var execStatus: ProcessPipePair?
 
-    init(needsIsolationHandshake: Bool, reservedDescriptor: Int32?) throws {
+    init(
+        needsIsolationHandshake: Bool,
+        needsExecStatus: Bool,
+        reservedDescriptors: Set<Int32>
+    ) throws {
         var opened: [Int32] = []
         do {
             stdin = try Self.makePipe(opened: &opened)
@@ -178,9 +201,12 @@ struct ProcessPipeSet: Sendable {
             isolationHandshake = needsIsolationHandshake
                 ? try Self.makePipe(opened: &opened)
                 : nil
-            if let reservedDescriptor {
-                try relocateCollision(
-                    with: reservedDescriptor,
+            execStatus = needsExecStatus
+                ? try Self.makePipe(opened: &opened)
+                : nil
+            if !reservedDescriptors.isEmpty {
+                try relocateCollisions(
+                    with: reservedDescriptors,
                     opened: &opened
                 )
             }
@@ -192,6 +218,9 @@ struct ProcessPipeSet: Sendable {
             try setNonblocking(stderr.readEnd)
             if let isolationHandshake {
                 try setNonblocking(isolationHandshake.readEnd)
+            }
+            if let execStatus {
+                try setNonblocking(execStatus.readEnd)
             }
             guard fcntl(stdin.writeEnd, F_SETNOSIGPIPE, 1) != -1 else {
                 throw POSIXIOError(
@@ -220,6 +249,10 @@ struct ProcessPipeSet: Sendable {
             descriptors.append(isolationHandshake.readEnd)
             descriptors.append(isolationHandshake.writeEnd)
         }
+        if let execStatus {
+            descriptors.append(execStatus.readEnd)
+            descriptors.append(execStatus.writeEnd)
+        }
         return descriptors
     }
 
@@ -229,6 +262,9 @@ struct ProcessPipeSet: Sendable {
         Darwin.close(stderr.writeEnd)
         if let isolationHandshake {
             Darwin.close(isolationHandshake.writeEnd)
+        }
+        if let execStatus {
+            Darwin.close(execStatus.writeEnd)
         }
     }
 
@@ -252,18 +288,18 @@ struct ProcessPipeSet: Sendable {
         )
     }
 
-    private mutating func relocateCollision(
-        with reservedDescriptor: Int32,
+    private mutating func relocateCollisions(
+        with reservedDescriptors: Set<Int32>,
         opened: inout [Int32]
     ) throws {
         func relocate(_ descriptor: inout Int32) throws {
-            guard descriptor == reservedDescriptor else {
+            guard reservedDescriptors.contains(descriptor) else {
                 return
             }
             let replacement = fcntl(
                 descriptor,
                 F_DUPFD_CLOEXEC,
-                reservedDescriptor + 1
+                (reservedDescriptors.max() ?? STDERR_FILENO) + 1
             )
             guard replacement != -1 else {
                 throw POSIXIOError(
@@ -287,6 +323,10 @@ struct ProcessPipeSet: Sendable {
         if isolationHandshake != nil {
             try relocate(&isolationHandshake!.readEnd)
             try relocate(&isolationHandshake!.writeEnd)
+        }
+        if execStatus != nil {
+            try relocate(&execStatus!.readEnd)
+            try relocate(&execStatus!.writeEnd)
         }
     }
 }

@@ -8,7 +8,15 @@ final class ProcessExecution: @unchecked Sendable {
         case protocolViolation(String)
         case writeFailure
         case isolationFailure
+        case execFailure(String)
         case lifecycleFailure(String)
+
+        var isWriteFailure: Bool {
+            if case .writeFailure = self {
+                return true
+            }
+            return false
+        }
     }
 
     private let invocation: HelperProcessInvocation
@@ -25,9 +33,14 @@ final class ProcessExecution: @unchecked Sendable {
     private var directProcessReaped = false
     private var exitCode: Int32 = 0
     private var stdinWorkerExited = false
+    private var stdinWorkerStarted = false
+    private var pendingInputDescriptor: Int32?
     private var stdoutWorkerExited = false
     private var stderrWorkerExited = false
     private var isolationWorkerExited: Bool
+    private var isolationSucceeded: Bool
+    private var execStatusWorkerExited: Bool
+    private var execSucceeded: Bool
     private var stdoutData = Data()
     private var stderrData = Data()
     private var terminationCause: TerminationCause?
@@ -35,6 +48,7 @@ final class ProcessExecution: @unchecked Sendable {
     private var stopInput = false
     private var stopOutputs = false
     private var stopIsolation = false
+    private var stopExecStatus = false
     private var generationIsValid = true
     private var didFinish = false
     private var reapWasAllowed = false
@@ -55,6 +69,9 @@ final class ProcessExecution: @unchecked Sendable {
         self.command = command
         self.observer = observer
         isolationWorkerExited = command.isolationHandshakeDescriptor == nil
+        isolationSucceeded = command.isolationHandshakeDescriptor == nil
+        execStatusWorkerExited = command.execStatusDescriptor == nil
+        execSucceeded = command.execStatusDescriptor == nil
     }
 
     func execute() async throws -> HelperProcessOutput {
@@ -82,7 +99,13 @@ final class ProcessExecution: @unchecked Sendable {
         do {
             pipes = try ProcessPipeSet(
                 needsIsolationHandshake: command.isolationHandshakeDescriptor != nil,
-                reservedDescriptor: command.isolationHandshakeDescriptor
+                needsExecStatus: command.execStatusDescriptor != nil,
+                reservedDescriptors: Set(
+                    [
+                        command.isolationHandshakeDescriptor,
+                        command.execStatusDescriptor,
+                    ].compactMap { $0 }
+                )
             )
         } catch {
             finishBeforeSpawn(
@@ -115,6 +138,7 @@ final class ProcessExecution: @unchecked Sendable {
         pipes.closeChildEndsInParent()
         lock.lock()
         self.process = process
+        pendingInputDescriptor = pipes.stdin.writeEnd
         processStarted = true
         let mustCancel = cancellationRequested
         lock.unlock()
@@ -131,22 +155,6 @@ final class ProcessExecution: @unchecked Sendable {
         process: POSIXProcessHandle
     ) {
         let currentGeneration = generation
-        Thread.detachNewThread {
-            ProcessIOWorkers.writeRequest(
-                self.invocation.request,
-                to: pipes.stdin.writeEnd,
-                state: {
-                    self.inputWorkerState(generation: currentGeneration)
-                },
-                didExit: { failed, incomplete in
-                    self.inputWorkerDidExit(
-                        failed: failed,
-                        incomplete: incomplete,
-                        generation: currentGeneration
-                    )
-                }
-            )
-        }
         Thread.detachNewThread {
             ProcessIOWorkers.readOutput(
                 from: pipes.stdout.readEnd,
@@ -202,9 +210,28 @@ final class ProcessExecution: @unchecked Sendable {
                             generation: currentGeneration
                         )
                     },
-                    didExit: { _, failed in
+                    didExit: { installed, failed in
                         self.isolationWorkerDidExit(
+                            installed: installed,
                             failed: failed,
+                            generation: currentGeneration
+                        )
+                    }
+                )
+            }
+        }
+        if let status = pipes.execStatus {
+            Thread.detachNewThread {
+                ProcessIOWorkers.readExecStatus(
+                    from: status.readEnd,
+                    shouldContinue: {
+                        self.execStatusWorkerShouldContinue(
+                            generation: currentGeneration
+                        )
+                    },
+                    didExit: { result in
+                        self.execStatusWorkerDidExit(
+                            result,
                             generation: currentGeneration
                         )
                     }
@@ -213,6 +240,49 @@ final class ProcessExecution: @unchecked Sendable {
         }
         Thread.detachNewThread {
             self.waitForDirectProcess(process, generation: currentGeneration)
+        }
+        startInputWorkerIfReady(generation: currentGeneration)
+    }
+
+    private func startInputWorkerIfReady(generation: UUID) {
+        var descriptor: Int32?
+        lock.lock()
+        if generationIsValid,
+            self.generation == generation,
+            !stopInput,
+            !cancellationRequested,
+            !directProcessExited,
+            isolationWorkerExited,
+            isolationSucceeded,
+            execStatusWorkerExited,
+            execSucceeded,
+            !stdinWorkerStarted,
+            let pendingInputDescriptor
+        {
+            stdinWorkerStarted = true
+            self.pendingInputDescriptor = nil
+            descriptor = pendingInputDescriptor
+        }
+        lock.unlock()
+
+        guard let descriptor else {
+            return
+        }
+        Thread.detachNewThread {
+            ProcessIOWorkers.writeRequest(
+                self.invocation.request,
+                to: descriptor,
+                state: {
+                    self.inputWorkerState(generation: generation)
+                },
+                didExit: { failed, incomplete in
+                    self.inputWorkerDidExit(
+                        failed: failed,
+                        incomplete: incomplete,
+                        generation: generation
+                    )
+                }
+            )
         }
     }
 
@@ -286,6 +356,14 @@ final class ProcessExecution: @unchecked Sendable {
         return generationIsValid
             && self.generation == generation
             && !stopIsolation
+    }
+
+    private func execStatusWorkerShouldContinue(generation: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return generationIsValid
+            && self.generation == generation
+            && !stopExecStatus
     }
 
     private func append(
@@ -368,6 +446,7 @@ final class ProcessExecution: @unchecked Sendable {
     }
 
     private func isolationWorkerDidExit(
+        installed: Bool,
         failed: Bool,
         generation: UUID
     ) {
@@ -377,11 +456,49 @@ final class ProcessExecution: @unchecked Sendable {
             return
         }
         isolationWorkerExited = true
-        let alreadyTerminating = terminationCause != nil
+        isolationSucceeded = installed && !failed
         lock.unlock()
         observer.processLifecycleDidEmit(.isolationWorkerExited)
-        if failed, !alreadyTerminating {
+        if failed {
             requestTermination(.isolationFailure, generation: generation)
+        } else if installed {
+            startInputWorkerIfReady(generation: generation)
+        }
+        workerStateDidChange()
+    }
+
+    private func execStatusWorkerDidExit(
+        _ result: ProcessExecStatus,
+        generation: UUID
+    ) {
+        lock.lock()
+        guard generationIsValid, self.generation == generation else {
+            lock.unlock()
+            return
+        }
+        execStatusWorkerExited = true
+        execSucceeded = result == .succeeded
+        lock.unlock()
+        observer.processLifecycleDidEmit(.execStatusWorkerExited)
+
+        switch result {
+        case .succeeded:
+            startInputWorkerIfReady(generation: generation)
+        case .failed(let errorNumber):
+            let message = String(cString: strerror(errorNumber))
+            requestTermination(
+                .execFailure(
+                    "Unable to exec helper: \(message) (errno \(errorNumber))"
+                ),
+                generation: generation
+            )
+        case .malformed:
+            requestTermination(
+                .execFailure("Launch shim returned malformed exec status"),
+                generation: generation
+            )
+        case .stopped:
+            break
         }
         workerStateDidChange()
     }
@@ -390,6 +507,17 @@ final class ProcessExecution: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return terminationCause != nil
+    }
+
+    private func abandonPendingInputLocked() {
+        guard !stdinWorkerStarted, !stdinWorkerExited else {
+            return
+        }
+        if let pendingInputDescriptor {
+            Darwin.close(pendingInputDescriptor)
+        }
+        pendingInputDescriptor = nil
+        stdinWorkerExited = true
     }
 
     private func directProcessDidExit(generation: UUID) {
@@ -401,6 +529,7 @@ final class ProcessExecution: @unchecked Sendable {
             return
         }
         directProcessExited = true
+        abandonPendingInputLocked()
         timer = timeoutTask
         timeoutTask = nil
         if !stopOutputs,
@@ -446,6 +575,7 @@ final class ProcessExecution: @unchecked Sendable {
         stopInput = true
         stopOutputs = true
         stopIsolation = true
+        stopExecStatus = true
         lock.unlock()
         observer.processLifecycleDidEmit(.directProcessExited)
         maybeFinish()
@@ -460,6 +590,7 @@ final class ProcessExecution: @unchecked Sendable {
             stdoutWorkerExited,
             stderrWorkerExited,
             isolationWorkerExited,
+            execStatusWorkerExited,
             (!escalationWasReserved || escalationDidFire),
             !reapWasAllowed
         {
@@ -499,15 +630,25 @@ final class ProcessExecution: @unchecked Sendable {
         }
         if case .cancellation = cause {
             terminationCause = .cancellation
+        } else if case .isolationFailure = cause,
+            terminationCause == nil || terminationCause?.isWriteFailure == true
+        {
+            terminationCause = cause
+        } else if case .execFailure = cause,
+            terminationCause == nil || terminationCause?.isWriteFailure == true
+        {
+            terminationCause = cause
         } else if terminationCause == nil {
             terminationCause = cause
         }
         stopInput = true
+        stopExecStatus = true
+        abandonPendingInputLocked()
         switch cause {
         case .cancellation, .timeout, .protocolViolation:
             stopOutputs = true
             stopIsolation = true
-        case .isolationFailure:
+        case .isolationFailure, .execFailure:
             stopIsolation = true
         case .writeFailure, .lifecycleFailure:
             break
@@ -531,6 +672,7 @@ final class ProcessExecution: @unchecked Sendable {
         if scheduleEscalation {
             scheduleEscalationTask(generation: generation)
         }
+        workerStateDidChange()
     }
 
     private func scheduleEscalationTask(generation: UUID) {
@@ -658,7 +800,8 @@ final class ProcessExecution: @unchecked Sendable {
             stdinWorkerExited,
             stdoutWorkerExited,
             stderrWorkerExited,
-            isolationWorkerExited
+            isolationWorkerExited,
+            execStatusWorkerExited
         {
             didFinish = true
             generationIsValid = false
@@ -690,6 +833,8 @@ final class ProcessExecution: @unchecked Sendable {
                             : stderrText
                     )
                 )
+            case .execFailure(let message):
+                result = .failure(TranscriptionFailure.helperLaunch(message))
             case .lifecycleFailure(let message):
                 result = .failure(TranscriptionFailure.helperLaunch(message))
             case nil:

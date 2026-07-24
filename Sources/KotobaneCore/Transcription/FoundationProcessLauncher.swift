@@ -73,15 +73,18 @@ public struct HelperProcessCommand: Equatable, Sendable {
     public let executableURL: URL
     public let arguments: [String]
     public let isolationHandshakeDescriptor: Int32?
+    public let execStatusDescriptor: Int32?
 
     public init(
         executableURL: URL,
         arguments: [String],
-        isolationHandshakeDescriptor: Int32? = nil
+        isolationHandshakeDescriptor: Int32? = nil,
+        execStatusDescriptor: Int32? = nil
     ) {
         self.executableURL = executableURL
         self.arguments = arguments
         self.isolationHandshakeDescriptor = isolationHandshakeDescriptor
+        self.execStatusDescriptor = execStatusDescriptor
     }
 }
 
@@ -93,15 +96,18 @@ public struct SandboxExecNetworkIsolation: HelperProcessIsolating {
     public static let denyNetworkProfile =
         "(version 1)\n(allow default)\n(deny network*)\n"
     public static let handshakeDescriptor: Int32 = 63
-    public static let helperLaunchScript =
-        #"printf x >&63 || exit 125; exec 63>&-; exec "$@""#
+    public static let execStatusDescriptor: Int32 = 64
 
     private let sandboxExecutableURL: URL
+    private let launchShimExecutableURL: URL
 
     public init(
-        sandboxExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
+        sandboxExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/sandbox-exec"),
+        launchShimExecutableURL: URL = Bundle.main.bundleURL
+            .appending(path: "Contents/Helpers/kotobane-launch-shim")
     ) {
         self.sandboxExecutableURL = sandboxExecutableURL
+        self.launchShimExecutableURL = launchShimExecutableURL
     }
 
     public func command(for helperExecutableURL: URL) throws -> HelperProcessCommand {
@@ -113,13 +119,13 @@ public struct SandboxExecNetworkIsolation: HelperProcessIsolating {
             arguments: [
                 "-p",
                 Self.denyNetworkProfile,
-                "/bin/sh",
-                "-c",
-                Self.helperLaunchScript,
-                "kotobane-helper",
+                launchShimExecutableURL.path,
+                String(Self.handshakeDescriptor),
+                String(Self.execStatusDescriptor),
                 helperExecutableURL.path,
             ],
-            isolationHandshakeDescriptor: Self.handshakeDescriptor
+            isolationHandshakeDescriptor: Self.handshakeDescriptor,
+            execStatusDescriptor: Self.execStatusDescriptor
         )
     }
 }
@@ -130,6 +136,7 @@ enum ProcessLifecycleEvent: Equatable, Sendable {
     case stdoutWorkerExited
     case stderrWorkerExited
     case isolationWorkerExited
+    case execStatusWorkerExited
     case signal(generation: UUID, signal: Int32)
     case willResume
 }
@@ -145,20 +152,24 @@ private struct NullProcessLifecycleObserver: ProcessLifecycleObserving {
 public struct FoundationProcessLauncher: ProcessLaunching {
     private let isolation: any HelperProcessIsolating
     private let lifecycleObserver: any ProcessLifecycleObserving
+    private let preSpawnHook: (@Sendable () -> Void)?
 
     public init(
         isolation: any HelperProcessIsolating = SandboxExecNetworkIsolation()
     ) {
         self.isolation = isolation
         lifecycleObserver = NullProcessLifecycleObserver()
+        preSpawnHook = nil
     }
 
     init(
         isolation: any HelperProcessIsolating,
-        lifecycleObserver: any ProcessLifecycleObserving
+        lifecycleObserver: any ProcessLifecycleObserving,
+        preSpawnHook: (@Sendable () -> Void)? = nil
     ) {
         self.isolation = isolation
         self.lifecycleObserver = lifecycleObserver
+        self.preSpawnHook = preSpawnHook
     }
 
     public func run(_ invocation: HelperProcessInvocation) async throws -> HelperProcessOutput {
@@ -173,6 +184,7 @@ public struct FoundationProcessLauncher: ProcessLaunching {
                 "Helper executable is missing or not executable: \(invocation.executableURL.path)"
             )
         }
+        preSpawnHook?()
 
         let command: HelperProcessCommand
         do {

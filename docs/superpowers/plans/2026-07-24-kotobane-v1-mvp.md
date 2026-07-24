@@ -46,6 +46,8 @@
 │   │   ├── HistoryWindow.swift
 │   │   ├── SettingsWindow.swift
 │   │   └── ModelSetupView.swift
+│   ├── KotobaneLaunchShim
+│   │   └── main.c
 │   └── KotobaneCore
 │       ├── Domain
 │       │   ├── Capture.swift
@@ -401,7 +403,10 @@ git commit -m "feat: persist captures and settings atomically"
 - Create: `Sources/KotobaneCore/Transcription/HelperProtocol.swift`
 - Create: `Sources/KotobaneCore/Transcription/MLXHelperEngine.swift`
 - Create: `Sources/KotobaneCore/Transcription/FoundationProcessLauncher.swift`
+- Create: `Sources/KotobaneCore/Transcription/POSIXProcessHandle.swift`
 - Create: `Sources/KotobaneCore/Transcription/ProcessExecution.swift`
+- Create: `Sources/KotobaneCore/Transcription/ProcessIOWorkers.swift`
+- Create: `Sources/KotobaneLaunchShim/main.c`
 - Create: `Tests/KotobaneCoreTests/HelperProtocolTests.swift`
 - Create: `Tests/KotobaneCoreTests/MLXHelperEngineTests.swift`
 - Create: `Tests/Fixtures/fake-helper.py`
@@ -467,12 +472,17 @@ Canonicalize the audio URL and verify it is a descendant of `allowedAudioRoot`
 before launch. Use a task group to race the response against
 `ContinuousClock.sleep(for: timeout)`. Terminate and reap timed-out processes.
 Retry only crash, EOF, and timeout errors; do not retry model or input errors.
-The production Foundation launcher must fail closed unless it can invoke the
-helper through `/usr/bin/sandbox-exec` with an explicit profile that denies
-inbound and outbound network access. Offline environment variables are
-defense-in-depth configuration, not the network-isolation boundary. Tests may
-inject a no-op isolation strategy only because the outer test sandbox rejects
-nested `sandbox-exec`.
+The production Foundation launcher must fail closed unless it can invoke a
+bundled, dependency-free launch shim through `/usr/bin/sandbox-exec` with an
+explicit profile that denies inbound and outbound network access. The shim
+reports sandbox admission on one descriptor, marks a second status descriptor
+close-on-exec, and calls `execve` for the helper. EOF on that second descriptor
+confirms that the helper image was installed; a fixed structured errno record
+is a non-retryable helper-launch failure. Do not start the stdin worker before
+both confirmations. Offline environment variables are defense-in-depth
+configuration, not the network-isolation boundary. Tests may replace the
+sandbox executable with a deterministic fixture because the outer test sandbox
+rejects nested `sandbox-exec`.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -951,6 +961,7 @@ git commit -m "feat: add menu bar capture and review experience"
 - Create: `README.md`
 - Create: `LICENSE`
 - Create: `THIRD_PARTY_NOTICES.md`
+- Modify: `Package.swift`
 - Modify: `.gitignore`
 
 **Interfaces:**
@@ -970,10 +981,12 @@ Expected: failure because the packaging script does not exist.
 `package-app.sh` must:
 
 1. reject non-arm64 hosts;
-2. run `swift build -c release --product Kotobane`;
-3. create `dist/Kotobane.app/Contents/{MacOS,Resources}`;
+2. run `swift build -c release --product Kotobane` and
+   `swift build -c release --product kotobane-launch-shim`;
+3. create `dist/Kotobane.app/Contents/{MacOS,Helpers,Resources}`;
 4. copy the release executable to `Contents/MacOS/Kotobane`;
-5. copy the helper, lock file, bootstrap script, and `Info.plist`;
+5. copy `kotobane-launch-shim` to `Contents/Helpers`, then copy the Python
+   helper, lock file, bootstrap script, and `Info.plist`;
 6. set `CFBundleIdentifier=dev.kotobane.app`,
    `LSMinimumSystemVersion=14.0`, `LSUIElement=true`, and
    `NSMicrophoneUsageDescription`;
@@ -993,15 +1006,18 @@ per-child boundary with environment variables or a future entitlement.
 scripts/swift-test.sh
 python3 -m unittest discover -s helper/tests -v
 swift build -c release --product Kotobane
+swift build -c release --product kotobane-launch-shim
 scripts/package-app.sh
 plutil -lint Resources/Info.plist
 codesign --verify --deep --strict dist/Kotobane.app
 ```
 
-The verification gate also runs the Task 4 production-isolation unit tests,
-which assert the exact `sandbox-exec` wrapper/profile and fail-closed
-classification, and inspects the signed entitlements to confirm that no network
-client/server keys were introduced.
+The verification gate also runs the Task 4 production-isolation and exec-status
+tests, which assert the exact `sandbox-exec` wrapper/profile, ensure the
+packaged shim is executable, distinguish sandbox rejection from helper
+`execve` failure, and verify fail-closed classification. It also inspects the
+signed entitlements to confirm that no network client/server keys were
+introduced.
 
 Choose the MIT License. Document Apple-silicon and macOS floors, Command Line
 Tools build steps, first-run model setup, disk-size display behavior, local data

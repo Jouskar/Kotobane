@@ -493,21 +493,23 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
 @Test func productionIsolationUsesExactDenyNetworkSandboxWrapper() throws {
     let helperURL = URL(fileURLWithPath: "/fixture/helper")
 
-    let command = try SandboxExecNetworkIsolation().command(for: helperURL)
+    let command = try SandboxExecNetworkIsolation(
+        launchShimExecutableURL: URL(fileURLWithPath: "/fixture/launch-shim")
+    ).command(for: helperURL)
 
     #expect(command.executableURL.path == "/usr/bin/sandbox-exec")
     #expect(
         command.arguments == [
             "-p",
             "(version 1)\n(allow default)\n(deny network*)\n",
-            "/bin/sh",
-            "-c",
-            #"printf x >&63 || exit 125; exec 63>&-; exec "$@""#,
-            "kotobane-helper",
+            "/fixture/launch-shim",
+            "63",
+            "64",
             "/fixture/helper",
         ]
     )
     #expect(command.isolationHandshakeDescriptor == 63)
+    #expect(command.execStatusDescriptor == 64)
 }
 
 @Test func productionSandboxStrategyRunsHelperOnlyAfterIsolationHandshake() async throws {
@@ -521,7 +523,10 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
         ]
     )
     let launcher = FoundationProcessLauncher(
-        isolation: SandboxExecNetworkIsolation(sandboxExecutableURL: fakeHelperURL)
+        isolation: SandboxExecNetworkIsolation(
+            sandboxExecutableURL: fakeHelperURL,
+            launchShimExecutableURL: testLaunchShimURL
+        )
     )
 
     let output = try await launcher.run(invocation)
@@ -537,7 +542,10 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
         environment: ["KOTOBANE_FAKE_SANDBOX_MODE": "reject"]
     )
     let launcher = FoundationProcessLauncher(
-        isolation: SandboxExecNetworkIsolation(sandboxExecutableURL: fakeHelperURL)
+        isolation: SandboxExecNetworkIsolation(
+            sandboxExecutableURL: fakeHelperURL,
+            launchShimExecutableURL: testLaunchShimURL
+        )
     )
 
     do {
@@ -553,6 +561,203 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
     } catch {
         Issue.record("Unexpected error: \(error)")
     }
+}
+
+@Test func invalidExecutableFormatIsNonRetryableHelperLaunch() async throws {
+    let fixture = try AudioFixture(named: "invalid-format-audio.wav")
+    defer { fixture.remove() }
+    let invalidHelper = try makeExecutableFixture(
+        in: fixture.root,
+        named: "invalid-format-helper",
+        contents: "this is not an executable image"
+    )
+    let observer = RecordingProcessLifecycleObserver()
+    let launcher = FoundationProcessLauncher(
+        isolation: SandboxExecNetworkIsolation(
+            sandboxExecutableURL: fakeHelperURL,
+            launchShimExecutableURL: testLaunchShimURL
+        ),
+        lifecycleObserver: observer
+    )
+    let engine = MLXHelperEngine(
+        helperExecutableURL: invalidHelper,
+        allowedAudioRoot: fixture.root,
+        timeout: .seconds(2),
+        launcher: launcher
+    )
+
+    let failure = await transcriptionFailure {
+        try await engine.transcribe(fixture.request)
+    }
+
+    guard case .helperLaunch(let diagnostic) = failure else {
+        Issue.record("Expected helper launch failure, got \(String(describing: failure))")
+        return
+    }
+    #expect(diagnostic.contains("errno"))
+    #expect(!observer.events.contains(.stdinWorkerExited))
+    #expect(observer.events.filter { $0 == .directProcessExited }.count == 1)
+}
+
+@Test func missingShebangInterpreterIsNonRetryableHelperLaunch() async throws {
+    let fixture = try AudioFixture(named: "missing-interpreter-audio.wav")
+    defer { fixture.remove() }
+    let invalidHelper = try makeExecutableFixture(
+        in: fixture.root,
+        named: "missing-interpreter-helper",
+        contents: "#!/definitely/missing/kotobane-interpreter\n"
+    )
+    let observer = RecordingProcessLifecycleObserver()
+    let launcher = FoundationProcessLauncher(
+        isolation: SandboxExecNetworkIsolation(
+            sandboxExecutableURL: fakeHelperURL,
+            launchShimExecutableURL: testLaunchShimURL
+        ),
+        lifecycleObserver: observer
+    )
+    let engine = MLXHelperEngine(
+        helperExecutableURL: invalidHelper,
+        allowedAudioRoot: fixture.root,
+        timeout: .seconds(2),
+        launcher: launcher
+    )
+
+    let failure = await transcriptionFailure {
+        try await engine.transcribe(fixture.request)
+    }
+
+    guard case .helperLaunch(let diagnostic) = failure else {
+        Issue.record("Expected helper launch failure, got \(String(describing: failure))")
+        return
+    }
+    #expect(diagnostic.contains("errno 2"))
+    #expect(!observer.events.contains(.stdinWorkerExited))
+    #expect(observer.events.filter { $0 == .directProcessExited }.count == 1)
+}
+
+@Test func helperRemovedAfterPrevalidationIsNonRetryableHelperLaunch() async throws {
+    let fixture = try AudioFixture(named: "removed-helper-audio.wav")
+    defer { fixture.remove() }
+    let helper = try makeExecutableFixture(
+        in: fixture.root,
+        named: "removed-helper",
+        contents: "#!/bin/sh\nexit 0\n"
+    )
+    let observer = RecordingProcessLifecycleObserver()
+    let launcher = FoundationProcessLauncher(
+        isolation: SandboxExecNetworkIsolation(
+            sandboxExecutableURL: fakeHelperURL,
+            launchShimExecutableURL: testLaunchShimURL
+        ),
+        lifecycleObserver: observer,
+        preSpawnHook: {
+            try! FileManager.default.removeItem(at: helper)
+        }
+    )
+    let engine = MLXHelperEngine(
+        helperExecutableURL: helper,
+        allowedAudioRoot: fixture.root,
+        timeout: .seconds(2),
+        launcher: launcher
+    )
+
+    let failure = await transcriptionFailure {
+        try await engine.transcribe(fixture.request)
+    }
+
+    guard case .helperLaunch(let diagnostic) = failure else {
+        Issue.record("Expected helper launch failure, got \(String(describing: failure))")
+        return
+    }
+    #expect(diagnostic.contains("errno 2"))
+    #expect(!observer.events.contains(.stdinWorkerExited))
+    #expect(observer.events.filter { $0 == .directProcessExited }.count == 1)
+}
+
+@Test func sandboxRejectionWinsBeforeLargeRequestWriterCanStart() async throws {
+    let fixture = try AudioFixture(named: "sandbox-rejection-large.wav")
+    defer { fixture.remove() }
+    let rejectingSandbox = try makeExecutableFixture(
+        in: fixture.root,
+        named: "rejecting-sandbox",
+        contents: "#!/bin/sh\necho fixture sandbox rejected profile >&2\nexit 78\n"
+    )
+    let observer = RecordingProcessLifecycleObserver()
+    let launcher = FoundationProcessLauncher(
+        isolation: SandboxExecNetworkIsolation(
+            sandboxExecutableURL: rejectingSandbox,
+            launchShimExecutableURL: testLaunchShimURL
+        ),
+        lifecycleObserver: observer
+    )
+    let limits = HelperProcessLimits(
+        maximumLanguageBytes: 96 * 1024,
+        maximumRequestBytes: 128 * 1024,
+        terminationGrace: .milliseconds(75)
+    )
+    let engine = MLXHelperEngine(
+        helperExecutableURL: fakeHelperURL,
+        allowedAudioRoot: fixture.root,
+        timeout: .seconds(2),
+        limits: limits,
+        launcher: launcher
+    )
+    let request = TranscriptionRequest(
+        id: fixture.requestID,
+        audioURL: fixture.audioURL,
+        language: String(repeating: "a", count: 80 * 1024),
+        model: .small
+    )
+
+    let failure = await transcriptionFailure {
+        try await engine.transcribe(request)
+    }
+
+    guard case .isolationUnavailable(let diagnostic) = failure else {
+        Issue.record("Expected isolation failure, got \(String(describing: failure))")
+        return
+    }
+    #expect(diagnostic.contains("fixture sandbox rejected"))
+    #expect(!observer.events.contains(.stdinWorkerExited))
+    #expect(observer.events.filter { $0 == .directProcessExited }.count == 1)
+}
+
+@Test func successfulExecHandshakeKeepsActualHelperCrashRetryableOnce() async throws {
+    let fixture = try AudioFixture(named: "crash.wav")
+    defer { fixture.remove() }
+    let observer = RecordingProcessLifecycleObserver()
+    let launcher = FoundationProcessLauncher(
+        isolation: SandboxExecNetworkIsolation(
+            sandboxExecutableURL: fakeHelperURL,
+            launchShimExecutableURL: testLaunchShimURL
+        ),
+        lifecycleObserver: observer
+    )
+    let engine = MLXHelperEngine(
+        helperExecutableURL: fakeHelperURL,
+        allowedAudioRoot: fixture.root,
+        timeout: .seconds(2),
+        launcher: launcher
+    )
+
+    let failure = await transcriptionFailure {
+        try await engine.transcribe(fixture.request)
+    }
+
+    guard case .helperCrashed(let exitCode, let stderr) = failure else {
+        Issue.record("Expected helper crash, got \(String(describing: failure))")
+        return
+    }
+    #expect(exitCode == 17)
+    #expect(stderr.contains("fixture crash"))
+    #expect(observer.events.filter { $0 == .directProcessExited }.count == 2)
+    let firstExec = try #require(
+        observer.events.firstIndex(of: .execStatusWorkerExited)
+    )
+    let firstInput = try #require(
+        observer.events.firstIndex(of: .stdinWorkerExited)
+    )
+    #expect(firstExec < firstInput)
 }
 
 @Test func hostileDescendantsWithoutSelfGroupingAreKilledAsOneSpawnGroup() async throws {
@@ -738,6 +943,26 @@ private var fakeHelperURL: URL {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .appending(path: "Fixtures/fake-helper.py")
+}
+
+private var testLaunchShimURL: URL {
+    guard let path = ProcessInfo.processInfo.environment["KOTOBANE_TEST_LAUNCH_SHIM"] else {
+        fatalError("scripts/swift-test.sh must provide KOTOBANE_TEST_LAUNCH_SHIM")
+    }
+    return URL(fileURLWithPath: path)
+}
+
+private func makeExecutableFixture(
+    in directory: URL,
+    named name: String,
+    contents: String
+) throws -> URL {
+    let url = directory.appending(path: name)
+    try Data(contents.utf8).write(to: url)
+    guard chmod(url.path, 0o700) == 0 else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    return url
 }
 
 private struct TestProcessIsolation: HelperProcessIsolating {

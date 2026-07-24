@@ -21,4 +21,8 @@ if [[ -d "$framework_dir/Testing.framework" && -f "$interop_dir/lib_TestingInter
   )
 fi
 
+swift build --disable-sandbox --product kotobane-launch-shim
+swift_bin_path="$(swift build --disable-sandbox --show-bin-path)"
+export KOTOBANE_TEST_LAUNCH_SHIM="$swift_bin_path/kotobane-launch-shim"
+
 exec swift "${swift_test_args[@]}" "$@"
