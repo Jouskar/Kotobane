@@ -6,3 +6,4 @@ Models/
 .venv/
 captures/
 build/
+*.app/
