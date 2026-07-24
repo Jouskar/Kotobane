@@ -1,3 +1,5 @@
+from dataclasses import replace
+import hashlib
 import io
 import json
 import os
@@ -12,6 +14,7 @@ from unittest import mock
 HELPER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HELPER_ROOT))
 
+import kotobane_helper
 from kotobane_helper import serve, transcribe
 
 
@@ -73,6 +76,19 @@ class HelperTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        original_spec = kotobane_helper.MODEL_ALIASES[SMALL_MODEL]
+        fixture_spec = replace(
+            original_spec,
+            weight_sha256={
+                "model.safetensors": hashlib.sha256(b"{}").hexdigest()
+            },
+        )
+        spec_patch = mock.patch.dict(
+            kotobane_helper.MODEL_ALIASES,
+            {SMALL_MODEL: fixture_spec},
+        )
+        spec_patch.start()
+        self.addCleanup(spec_patch.stop)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -161,6 +177,20 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(response["code"], "model_unavailable")
         self.assertEqual(backend.calls, [])
 
+    def test_weight_corruption_after_ready_is_rejected_before_backend_use(self):
+        audio = self.root / "captures" / "note.wav"
+        audio.parent.mkdir(parents=True)
+        audio.write_bytes(b"RIFF")
+        model = prepare_model(self.root)
+        (model / "model.safetensors").write_bytes(b"corrupted after install")
+        backend = FakeBackend()
+
+        response = transcribe(request_for(audio), self.root, backend)
+
+        self.assertEqual(response["id"], REQUEST_ID)
+        self.assertEqual(response["code"], "model_unavailable")
+        self.assertEqual(backend.calls, [])
+
     def test_unknown_model_is_explicitly_rejected(self):
         audio = self.root / "captures" / "note.wav"
         audio.parent.mkdir(parents=True)
@@ -188,6 +218,22 @@ class HelperTests(unittest.TestCase):
 
         self.assertEqual(response["code"], "transcription_failed")
         self.assertNotIn("decoder exploded", json.dumps(response))
+
+    def test_invalid_backend_duration_maps_to_request_scoped_transcription_failure(self):
+        audio = self.root / "captures" / "note.wav"
+        audio.parent.mkdir(parents=True)
+        audio.write_bytes(b"RIFF")
+        prepare_model(self.root)
+
+        response = transcribe(
+            request_for(audio),
+            self.root,
+            FakeBackend(duration="not-a-duration"),
+        )
+
+        self.assertEqual(response["id"], REQUEST_ID)
+        self.assertEqual(response["status"], "failed")
+        self.assertEqual(response["code"], "transcription_failed")
 
     def test_serve_writes_exactly_one_json_response_line_per_request(self):
         audio = self.root / "captures" / "note.wav"

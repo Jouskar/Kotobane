@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -190,12 +191,27 @@ def transcribe(
         "duration",
         default=0.0,
     )
+    try:
+        normalized_duration = float(duration)
+        if not math.isfinite(normalized_duration) or normalized_duration < 0:
+            raise ValueError("duration must be finite and nonnegative")
+        normalized_language = str(detected_language)
+    except (TypeError, ValueError, OverflowError) as error:
+        print(
+            f"invalid backend result for request {request_id}: {type(error).__name__}",
+            file=sys.stderr,
+        )
+        return _failed(
+            request_id,
+            "transcription_failed",
+            "The local transcription backend returned an invalid result.",
+        )
     return {
         "id": request_id,
         "status": "completed",
         "text": text,
-        "detectedLanguage": str(detected_language),
-        "durationSeconds": float(duration),
+        "detectedLanguage": normalized_language,
+        "durationSeconds": normalized_duration,
     }
 
 

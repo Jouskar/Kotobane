@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 if [ "$(uname -m)" != "arm64" ]; then
     echo "Kotobane's local transcription runtime requires Apple silicon (arm64)." >&2
@@ -12,29 +13,31 @@ MANIFEST="$REPOSITORY_ROOT/helper/runtime-manifest.json"
 REQUIREMENTS="$REPOSITORY_ROOT/helper/requirements.lock"
 APP_SUPPORT_ROOT=${1:-"$HOME/Library/Application Support/Kotobane"}
 RUNTIME_DESTINATION="$APP_SUPPORT_ROOT/runtime"
+RUNTIME_READY="$RUNTIME_DESTINATION/ready.json"
 
 if [ -e "$RUNTIME_DESTINATION" ]; then
-    echo "Runtime destination already exists: $RUNTIME_DESTINATION" >&2
-    exit 1
+    if [ -f "$RUNTIME_READY" ] && [ ! -L "$RUNTIME_READY" ]; then
+        echo "Runtime destination is already ready: $RUNTIME_DESTINATION" >&2
+        exit 1
+    fi
+    rm -rf -- "$RUNTIME_DESTINATION"
 fi
 
-ARCHIVE_URL=$(/usr/bin/python3 -c \
-    'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["url"])' \
-    "$MANIFEST")
-ARCHIVE_SHA256=$(/usr/bin/python3 -c \
-    'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["sha256"])' \
-    "$MANIFEST")
-ARCHIVE_SIZE=$(/usr/bin/python3 -c \
-    'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["archiveSize"])' \
-    "$MANIFEST")
+ARCHIVE_URL=$(/usr/bin/plutil -extract url raw -o - "$MANIFEST")
+ARCHIVE_SHA256=$(/usr/bin/plutil -extract sha256 raw -o - "$MANIFEST")
+ARCHIVE_SIZE=$(/usr/bin/plutil -extract archiveSize raw -o - "$MANIFEST")
 
 mkdir -p "$APP_SUPPORT_ROOT"
 chmod 700 "$APP_SUPPORT_ROOT"
 STAGING=$(mktemp -d "$APP_SUPPORT_ROOT/.runtime-staging.XXXXXXXX")
 ARCHIVE="$STAGING/python-runtime.tar.gz"
+INSTALLING=0
 
 cleanup() {
     rm -rf -- "$STAGING"
+    if [ "$INSTALLING" = "1" ] && [ ! -f "$RUNTIME_READY" ]; then
+        rm -rf -- "$RUNTIME_DESTINATION"
+    fi
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -61,13 +64,24 @@ if [ ! -x "$STAGING/python/bin/python3" ]; then
     exit 1
 fi
 
-"$STAGING/python/bin/python3" -m venv "$STAGING/venv"
-"$STAGING/venv/bin/python" -m pip install \
+INSTALLING=1
+mkdir -p "$RUNTIME_DESTINATION"
+mv "$STAGING/python" "$RUNTIME_DESTINATION/python"
+"$RUNTIME_DESTINATION/python/bin/python3" -m venv "$RUNTIME_DESTINATION/venv"
+"$RUNTIME_DESTINATION/venv/bin/python" -m pip install \
     --no-cache-dir \
     --only-binary=:all: \
     --require-hashes \
     --requirement "$REQUIREMENTS"
 
-mv "$STAGING" "$RUNTIME_DESTINATION"
+"$RUNTIME_DESTINATION/venv/bin/python" -c \
+    'import pathlib,sys; expected=pathlib.Path(sys.argv[1]).resolve(); actual=pathlib.Path(sys.prefix).resolve(); raise SystemExit(0 if actual == expected else 1)' \
+    "$RUNTIME_DESTINATION/venv"
+
+READY_TEMP="$RUNTIME_DESTINATION/.ready.$$"
+printf '{"runtimeSHA256":"%s"}\n' "$ARCHIVE_SHA256" > "$READY_TEMP"
+mv "$READY_TEMP" "$RUNTIME_READY"
+INSTALLING=0
+rm -rf -- "$STAGING"
 trap - EXIT HUP INT TERM
 echo "Kotobane helper runtime installed at $RUNTIME_DESTINATION"

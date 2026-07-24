@@ -1,3 +1,5 @@
+from dataclasses import replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -34,7 +36,18 @@ class ModelInstallTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.destination = self.root / "models" / "qwen3-asr-0.6b"
-        self.spec = MODEL_SPECS[SMALL_REPOSITORY]
+        self.spec = replace(
+            MODEL_SPECS[SMALL_REPOSITORY],
+            weight_sha256={
+                "model.safetensors": hashlib.sha256(b"{}").hexdigest()
+            },
+        )
+        spec_patch = mock.patch.dict(
+            MODEL_SPECS,
+            {SMALL_REPOSITORY: self.spec},
+        )
+        spec_patch.start()
+        self.addCleanup(spec_patch.stop)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -69,6 +82,25 @@ class ModelInstallTests(unittest.TestCase):
                 self.spec.expected_bytes,
                 self.spec.expected_bytes + 2 * 1024**3,
                 downloader=incomplete_download,
+            )
+
+        staging = list((self.destination.parent / ".staging").iterdir())
+        self.assertEqual(len(staging), 1)
+        self.assertFalse((staging[0] / "ready.json").exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_corrupted_weight_is_rejected_before_activation(self):
+        def corrupt_download(repository, revision, local_dir):
+            write_complete_model(local_dir)
+            (local_dir / "model.safetensors").write_bytes(b"corrupted")
+
+        with self.assertRaises(ModelValidationError):
+            install_model(
+                SMALL_REPOSITORY,
+                self.destination,
+                self.spec.expected_bytes,
+                self.spec.expected_bytes + 2 * 1024**3,
+                downloader=corrupt_download,
             )
 
         staging = list((self.destination.parent / ".staging").iterdir())

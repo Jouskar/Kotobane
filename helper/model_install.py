@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -110,7 +112,7 @@ def _download_snapshot(repository: str, revision: str, local_dir: Path) -> None:
 
 
 def validate_model_directory(directory: Path, spec: ModelSpec) -> None:
-    """Validate the real file layout used by the two pinned Qwen repositories."""
+    """Validate the pinned Qwen file layout and every model weight digest."""
     resolved_root = directory.resolve(strict=True)
     missing: list[str] = []
     for relative_name in spec.required_files:
@@ -131,6 +133,20 @@ def validate_model_directory(directory: Path, spec: ModelSpec) -> None:
         raise ModelValidationError(
             "Model snapshot is missing required regular files: "
             + ", ".join(sorted(missing))
+        )
+
+    mismatched: list[str] = []
+    for relative_name, expected_sha256 in spec.weight_sha256.items():
+        digest = hashlib.sha256()
+        with (directory / relative_name).open("rb") as weight_file:
+            while chunk := weight_file.read(8 * 1024 * 1024):
+                digest.update(chunk)
+        if not hmac.compare_digest(digest.hexdigest(), expected_sha256):
+            mismatched.append(relative_name)
+    if mismatched:
+        raise ModelValidationError(
+            "Model snapshot has invalid SHA-256 weights: "
+            + ", ".join(sorted(mismatched))
         )
 
 
