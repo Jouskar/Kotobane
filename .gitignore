@@ -8,3 +8,4 @@ Models/
 captures/
 build/
 *.app/
+dist/
