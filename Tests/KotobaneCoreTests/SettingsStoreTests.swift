@@ -1,14 +1,12 @@
-import XCTest
+import Testing
 @testable import KotobaneCore
 
-final class SettingsStoreTests: XCTestCase {
-    func testDefaultsFavorPrivateTurkishWorkflow() {
-        let settings = AppSettings.defaults
-        XCTAssertEqual(settings.version, AppSettings.currentVersion)
-        XCTAssertEqual(settings.languageHint, "Turkish")
-        XCTAssertEqual(settings.model, .small)
-        XCTAssertEqual(settings.audioRetention, .deleteAfterTranscription)
-        XCTAssertEqual(settings.shortcut, .init(keyCode: 49, modifiers: [.control, .option]))
-        XCTAssertFalse(settings.pasteAfterOpening)
-    }
+@Test func defaultsFavorPrivateTurkishWorkflow() {
+    let settings = AppSettings.defaults
+    #expect(settings.version == AppSettings.currentVersion)
+    #expect(settings.languageHint == "Turkish")
+    #expect(settings.model == .small)
+    #expect(settings.audioRetention == .deleteAfterTranscription)
+    #expect(settings.shortcut == .init(keyCode: 49, modifiers: [.control, .option]))
+    #expect(!settings.pasteAfterOpening)
 }

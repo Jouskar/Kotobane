@@ -6,7 +6,7 @@
 
 **Architecture:** A SwiftPM workspace separates a testable `KotobaneCore` library from a thin SwiftUI/AppKit executable. Core protocols isolate recording, persistence, helper-process transcription, shortcuts, paste automation, and destination activation. A pinned Python helper performs offline MLX/Qwen inference over newline-delimited JSON, while shell scripts assemble and ad-hoc-sign a conventional `.app` bundle.
 
-**Tech Stack:** Swift 6.3, SwiftUI, AppKit, AVFoundation, Carbon, XCTest, Python 3.11/3.12, `unittest`, MLX, Qwen3-ASR, POSIX shell, Swift Package Manager.
+**Tech Stack:** Swift 6.3, Swift Testing, SwiftUI, AppKit, AVFoundation, Carbon, Python 3.11/3.12, `unittest`, MLX, Qwen3-ASR, POSIX shell, Swift Package Manager.
 
 ## Global Constraints
 
@@ -123,19 +123,17 @@
 
 ```swift
 // Tests/KotobaneCoreTests/SettingsStoreTests.swift
-import XCTest
+import Testing
 @testable import KotobaneCore
 
-final class SettingsStoreTests: XCTestCase {
-    func testDefaultsFavorPrivateTurkishWorkflow() {
-        let settings = AppSettings.defaults
-        XCTAssertEqual(settings.version, AppSettings.currentVersion)
-        XCTAssertEqual(settings.languageHint, "Turkish")
-        XCTAssertEqual(settings.model, .small)
-        XCTAssertEqual(settings.audioRetention, .deleteAfterTranscription)
-        XCTAssertEqual(settings.shortcut, .init(keyCode: 49, modifiers: [.control, .option]))
-        XCTAssertFalse(settings.pasteAfterOpening)
-    }
+@Test func defaultsFavorPrivateTurkishWorkflow() {
+    let settings = AppSettings.defaults
+    #expect(settings.version == AppSettings.currentVersion)
+    #expect(settings.languageHint == "Turkish")
+    #expect(settings.model == .small)
+    #expect(settings.audioRetention == .deleteAfterTranscription)
+    #expect(settings.shortcut == .init(keyCode: 49, modifiers: [.control, .option]))
+    #expect(!settings.pasteAfterOpening)
 }
 ```
 
@@ -208,11 +206,10 @@ git commit -m "feat: add package foundation and domain models"
 - [ ] **Step 1: Write failing exact-output tests**
 
 ```swift
-import XCTest
+import Testing
 @testable import KotobaneCore
 
-final class BriefComposerTests: XCTestCase {
-    func testBrainstormTemplateIsExactAndTranscriptIsVerbatim() {
+@Test func brainstormTemplateIsExactAndTranscriptIsVerbatim() {
         let transcript = "  Bunu değiştirme.\nİkinci satır.  "
         let expected = """
         # Brainstorm captured in Kotobane
@@ -236,15 +233,14 @@ final class BriefComposerTests: XCTestCase {
         4. Recommended next actions
         """
 
-        XCTAssertEqual(BriefComposer.compose(intent: .brainstorm, transcript: transcript), expected)
-    }
+    #expect(BriefComposer.compose(intent: .brainstorm, transcript: transcript) == expected)
+}
 
-    func testEveryIntentHasAStableTemplate() {
-        for intent in CaptureIntent.allCases {
-            let output = BriefComposer.compose(intent: intent, transcript: "ham metin")
-            XCTAssertTrue(output.contains("ham metin"))
-            XCTAssertEqual(output.components(separatedBy: "ham metin").count, 2)
-        }
+@Test func everyIntentHasAStableTemplate() {
+    for intent in CaptureIntent.allCases {
+        let output = BriefComposer.compose(intent: intent, transcript: "ham metin")
+        #expect(output.contains("ham metin"))
+        #expect(output.components(separatedBy: "ham metin").count == 2)
     }
 }
 ```
@@ -319,7 +315,10 @@ git commit -m "feat: compose deterministic handoff briefs"
 - [ ] **Step 1: Write failing filesystem behavior tests**
 
 ```swift
-func testSaveRoundTripsAndDeleteRemovesMetadataAndAudio() throws {
+import Testing
+@testable import KotobaneCore
+
+@Test func saveRoundTripsAndDeleteRemovesMetadataAndAudio() throws {
     let root = temporaryDirectory()
     let store = CaptureStore(root: root)
     let audio = root.appending(path: "captures/sample.wav")
@@ -329,23 +328,28 @@ func testSaveRoundTripsAndDeleteRemovesMetadataAndAudio() throws {
     let capture = Capture.fixture(audioFilename: "sample.wav")
 
     try store.save(capture)
-    XCTAssertEqual(try store.loadAll(), [capture])
+    #expect(try store.loadAll() == [capture])
 
     try store.delete(id: capture.id)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: audio.path))
-    XCTAssertTrue(try store.loadAll().isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: audio.path))
+    #expect(try store.loadAll().isEmpty)
 }
 
-func testCorruptMetadataIsReportedWithoutDeletingAudio() throws {
+@Test func corruptMetadataIsReportedWithoutDeletingAudio() throws {
     let root = temporaryDirectory()
     let store = CaptureStore(root: root)
     try store.prepareDirectories()
     try Data("{".utf8).write(to: store.metadataURL(for: UUID()))
 
-    XCTAssertThrowsError(try store.loadAll())
+    do {
+        _ = try store.loadAll()
+        Issue.record("Expected corrupt metadata to be reported")
+    } catch {
+        // Expected: corrupt metadata remains visible to the caller.
+    }
 }
 
-func testVersionOneSettingsMigrateNewPastePreferenceToDisabled() throws {
+@Test func versionOneSettingsMigrateNewPastePreferenceToDisabled() throws {
     let root = temporaryDirectory()
     let settingsURL = root.appending(path: "settings.json")
     try Data(#"{"version":1,"languageHint":"Turkish","model":"small","audioRetention":"deleteAfterTranscription","shortcut":{"keyCode":49,"modifiers":3}}"#.utf8)
@@ -353,8 +357,8 @@ func testVersionOneSettingsMigrateNewPastePreferenceToDisabled() throws {
 
     let migrated = try SettingsStore(url: settingsURL).load()
 
-    XCTAssertFalse(migrated.pasteAfterOpening)
-    XCTAssertEqual(migrated.version, AppSettings.currentVersion)
+    #expect(!migrated.pasteAfterOpening)
+    #expect(migrated.version == AppSettings.currentVersion)
 }
 ```
 
@@ -410,7 +414,10 @@ git commit -m "feat: persist captures and settings atomically"
 - [ ] **Step 1: Write failing codec and fake-process tests**
 
 ```swift
-func testRequestEncodingMatchesNDJSONContract() throws {
+import Testing
+@testable import KotobaneCore
+
+@Test func requestEncodingMatchesNDJSONContract() throws {
     let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     let request = HelperRequest(
         id: id,
@@ -420,18 +427,15 @@ func testRequestEncodingMatchesNDJSONContract() throws {
         model: "qwen3-asr-0.6b"
     )
     let line = try HelperCodec.encode(request)
-    XCTAssertEqual(
-        line,
-        #"{"action":"transcribe","audioPath":"/private/tmp/audio.wav","id":"00000000-0000-0000-0000-000000000001","language":"Turkish","model":"qwen3-asr-0.6b"}"# + "\n"
-    )
+    #expect(line == #"{"action":"transcribe","audioPath":"/private/tmp/audio.wav","id":"00000000-0000-0000-0000-000000000001","language":"Turkish","model":"qwen3-asr-0.6b"}"# + "\n")
 }
 
-func testEngineRestartsOnceAfterCrash() async throws {
+@Test func engineRestartsOnceAfterCrash() async throws {
     let launcher = ScriptedProcessLauncher(outcomes: [.exit(1), .line(completedJSON)])
     let engine = MLXHelperEngine(configuration: fixtureConfiguration, launcher: launcher)
     let result = try await engine.transcribe(fixtureRequest)
-    XCTAssertEqual(result.text, "Merhaba")
-    XCTAssertEqual(launcher.launchCount, 2)
+    #expect(result.text == "Merhaba")
+    #expect(launcher.launchCount == 2)
 }
 ```
 
@@ -609,7 +613,10 @@ git commit -m "feat: add offline Qwen transcription helper"
 - [ ] **Step 1: Write failing ordering and fallback tests**
 
 ```swift
-func testCodexCopiesBeforeOpening() async throws {
+import Testing
+@testable import KotobaneCore
+
+@Test func codexCopiesBeforeOpening() async throws {
     let events = EventRecorder()
     let coordinator = HandoffCoordinator(
         clipboard: SpyClipboard(events),
@@ -624,11 +631,11 @@ func testCodexCopiesBeforeOpening() async throws {
         pasteAfterOpening: false
     )
 
-    XCTAssertEqual(events.values, ["copy:brief", "open:codex"])
-    XCTAssertEqual(result, .activated(pasteAttempted: false))
+    #expect(events.values == ["copy:brief", "open:codex"])
+    #expect(result == .activated(pasteAttempted: false))
 }
 
-func testAccessibilityDenialKeepsSuccessfulCopyAndOpen() async throws {
+@Test func accessibilityDenialKeepsSuccessfulCopyAndOpen() async throws {
     let events = EventRecorder()
     let coordinator = HandoffCoordinator(
         clipboard: SpyClipboard(events),
@@ -643,8 +650,8 @@ func testAccessibilityDenialKeepsSuccessfulCopyAndOpen() async throws {
         pasteAfterOpening: true
     )
 
-    XCTAssertEqual(events.values, ["copy:brief", "open:claude", "paste-trust-check"])
-    XCTAssertEqual(result, .manualPasteRequired(reason: .accessibilityDenied))
+    #expect(events.values == ["copy:brief", "open:claude", "paste-trust-check"])
+    #expect(result == .manualPasteRequired(reason: .accessibilityDenied))
 }
 ```
 
@@ -698,8 +705,11 @@ git commit -m "feat: add resilient copy-first handoff"
 - [ ] **Step 1: Write failing state and retention tests**
 
 ```swift
+import Testing
+@testable import KotobaneCore
+
 @MainActor
-func testSuccessfulDefaultCapturePersistsTranscriptBeforeDeletingAudio() async throws {
+@Test func successfulDefaultCapturePersistsTranscriptBeforeDeletingAudio() async throws {
     let events = EventRecorder()
     let controller = makeController(
         recorder: SpyRecorder(events),
@@ -712,12 +722,13 @@ func testSuccessfulDefaultCapturePersistsTranscriptBeforeDeletingAudio() async t
     await controller.start()
     await controller.stop()
 
-    XCTAssertEqual(controller.state.capture?.transcript, "Merhaba")
-    XCTAssertEqual(events.values.suffix(2), ["persist", "delete-audio"])
+    let capture = try #require(controller.state.capture)
+    #expect(capture.transcript == "Merhaba")
+    #expect(events.values.suffix(2) == ["persist", "delete-audio"])
 }
 
 @MainActor
-func testPersistenceFailurePreservesAudioAndOffersRetry() async {
+@Test func persistenceFailurePreservesAudioAndOffersRetry() async {
     let events = EventRecorder()
     let controller = makeController(
         recorder: SpyRecorder(events),
@@ -730,8 +741,9 @@ func testPersistenceFailurePreservesAudioAndOffersRetry() async {
     await controller.start()
     await controller.stop()
 
-    XCTAssertEqual(controller.state.failure?.recovery, .retryTranscription)
-    XCTAssertFalse(events.values.contains("delete-audio"))
+    let failure = try #require(controller.state.failure)
+    #expect(failure.recovery == .retryTranscription)
+    #expect(!events.values.contains("delete-audio"))
 }
 ```
 
@@ -789,8 +801,11 @@ git commit -m "feat: capture microphone audio from a global shortcut"
 - [ ] **Step 1: Write failing capacity and activation tests**
 
 ```swift
+import Testing
+@testable import KotobaneCore
+
 @MainActor
-func testInsufficientSpacePreventsInstallerLaunch() async {
+@Test func insufficientSpacePreventsInstallerLaunch() async {
     let installer = SpyInstaller()
     let manager = ModelManager(
         catalog: .fixtures(smallBytes: 4_000),
@@ -800,8 +815,8 @@ func testInsufficientSpacePreventsInstallerLaunch() async {
 
     await manager.install(.small)
 
-    XCTAssertEqual(manager.state, .failed(.insufficientSpace(required: 5_000, available: 4_399)))
-    XCTAssertEqual(installer.launchCount, 0)
+    #expect(manager.state == .failed(.insufficientSpace(required: 5_000, available: 4_399)))
+    #expect(installer.launchCount == 0)
 }
 ```
 
