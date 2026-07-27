@@ -350,13 +350,8 @@ final class AppContainer {
         saveSettings()
     }
 
-    func showSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-    }
-
-    func showModelSettings() {
+    func selectModelSettingsTab() {
         settingsTab = .models
-        showSettings()
     }
 
     func installSelectedModel() {

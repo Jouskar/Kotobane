@@ -23,8 +23,8 @@ struct MenuBarContent: View {
             if let shortcutFailure = container.shortcutFailure {
                 Divider()
                 Text(shortcutFailure)
-                Button("Choose Another Shortcut…") {
-                    container.showSettings()
+                SettingsLink {
+                    Text("Choose Another Shortcut…")
                 }
             }
 
@@ -46,8 +46,8 @@ struct MenuBarContent: View {
                 }
             }
 
-            Button("Settings…") {
-                container.showSettings()
+            SettingsLink {
+                Text("Settings…")
             }
             .keyboardShortcut(",", modifiers: .command)
 
@@ -113,9 +113,10 @@ struct MenuBarContent: View {
                 Task { await container.retryCapture() }
             }
         case .openModelSettings:
-            Button("Install Model…") {
-                container.showModelSettings()
+            SettingsLink {
+                Text("Install Model…")
             }
+            .simultaneousGesture(TapGesture().onEnded { container.selectModelSettingsTab() })
             Button("Retry") {
                 Task { await container.retryCapture() }
             }
