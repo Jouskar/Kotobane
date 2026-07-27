@@ -115,7 +115,9 @@ final class AppContainer {
             let transcriptionEngine = MLXHelperEngine(
                 helperExecutableURL: bundledHelperURL(fileManager: fileManager),
                 allowedAudioRoot: directories.root,
-                timeout: .seconds(600)
+                timeout: .seconds(600),
+                runtimeBinDirectory: directories.root
+                    .appending(path: "runtime/venv/bin", directoryHint: .isDirectory)
             )
             let capture = makeCaptureController(
                 settings: settings,

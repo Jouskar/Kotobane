@@ -212,6 +212,27 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
     #expect(encoded.contains(#""audioPath":"\#(fixture.audioURL.standardizedFileURL.path)""#))
 }
 
+@Test func configuredRuntimeBinPrecedesSystemPythonForHelperLaunch() async throws {
+    let fixture = try AudioFixture(named: "runtime-path.wav")
+    defer { fixture.remove() }
+    let launcher = ScriptedProcessLauncher(
+        outcomes: [.output(.init(stdout: responseLine(id: fixture.requestID), stderr: Data(), exitCode: 0))]
+    )
+    let runtimeBin = URL(fileURLWithPath: "/private/Kotobane/runtime/venv/bin")
+    let engine = MLXHelperEngine(
+        helperExecutableURL: URL(fileURLWithPath: "/fixture/helper"),
+        allowedAudioRoot: fixture.root,
+        timeout: .seconds(1),
+        runtimeBinDirectory: runtimeBin,
+        launcher: launcher
+    )
+
+    _ = try await engine.transcribe(fixture.request)
+
+    let invocation = try #require(await launcher.invocations.first)
+    #expect(invocation.environment["PATH"]?.hasPrefix(runtimeBin.path + ":") == true)
+}
+
 @Test func realHelperKeepsStderrSeparateFromSuccessfulResponse() async throws {
     let fixture = try AudioFixture(named: "stderr-success.wav")
     defer { fixture.remove() }

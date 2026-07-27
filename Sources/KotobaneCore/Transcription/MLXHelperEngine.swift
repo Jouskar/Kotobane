@@ -3,6 +3,7 @@ import Foundation
 public struct MLXHelperEngine: TranscriptionEngine, Sendable {
     private let helperExecutableURL: URL
     private let allowedAudioRoot: URL
+    private let runtimeBinDirectory: URL?
     private let timeout: Duration
     private let limits: HelperProcessLimits
     private let launcher: any ProcessLaunching
@@ -11,12 +12,14 @@ public struct MLXHelperEngine: TranscriptionEngine, Sendable {
         helperExecutableURL: URL,
         allowedAudioRoot: URL,
         timeout: Duration,
+        runtimeBinDirectory: URL? = nil,
         limits: HelperProcessLimits = .init(),
         launcher: any ProcessLaunching = FoundationProcessLauncher()
     ) {
         self.helperExecutableURL = helperExecutableURL
         self.allowedAudioRoot = allowedAudioRoot
         self.timeout = timeout
+        self.runtimeBinDirectory = runtimeBinDirectory
         self.limits = limits
         self.launcher = launcher
     }
@@ -40,7 +43,7 @@ public struct MLXHelperEngine: TranscriptionEngine, Sendable {
         let invocation = HelperProcessInvocation(
             executableURL: helperExecutableURL,
             request: requestLine,
-            environment: Self.offlineEnvironment,
+            environment: offlineEnvironment,
             timeout: timeout,
             limits: limits
         )
@@ -159,8 +162,12 @@ public struct MLXHelperEngine: TranscriptionEngine, Sendable {
         return Data(line)
     }
 
-    private static var offlineEnvironment: [String: String] {
+    private var offlineEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
+        if let runtimeBinDirectory {
+            let existingPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+            environment["PATH"] = runtimeBinDirectory.path + ":" + existingPath
+        }
         environment["HF_HUB_OFFLINE"] = "1"
         environment["TRANSFORMERS_OFFLINE"] = "1"
         environment["NO_PROXY"] = "*"
