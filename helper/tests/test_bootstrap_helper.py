@@ -7,6 +7,27 @@ BOOTSTRAP = REPOSITORY_ROOT / "scripts" / "bootstrap-helper.sh"
 
 
 class BootstrapHelperTests(unittest.TestCase):
+    def test_bootstrap_resolves_flat_packaged_assets_before_repository_assets(self):
+        script = BOOTSTRAP.read_text(encoding="utf-8")
+
+        self.assertIn('ASSET_DIRECTORY="$SCRIPT_DIR"', script)
+        self.assertIn('ASSET_DIRECTORY="$REPOSITORY_ROOT/helper"', script)
+        self.assertIn('MANIFEST="$ASSET_DIRECTORY/runtime-manifest.json"', script)
+        self.assertIn('REQUIREMENTS="$ASSET_DIRECTORY/requirements.lock"', script)
+
+        packaged = script.index('ASSET_DIRECTORY="$SCRIPT_DIR"')
+        repository = script.index('ASSET_DIRECTORY="$REPOSITORY_ROOT/helper"')
+        manifest = script.index(
+            'MANIFEST="$ASSET_DIRECTORY/runtime-manifest.json"'
+        )
+        requirements = script.index(
+            'REQUIREMENTS="$ASSET_DIRECTORY/requirements.lock"'
+        )
+
+        self.assertLess(packaged, repository)
+        self.assertLess(repository, manifest)
+        self.assertLess(manifest, requirements)
+
     def test_bootstrap_uses_clean_macos_tools_and_builds_venv_at_final_path(self):
         script = BOOTSTRAP.read_text(encoding="utf-8")
 

@@ -8,9 +8,18 @@ if [ "$(uname -m)" != "arm64" ]; then
 fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-MANIFEST="$REPOSITORY_ROOT/helper/runtime-manifest.json"
-REQUIREMENTS="$REPOSITORY_ROOT/helper/requirements.lock"
+ASSET_DIRECTORY="$SCRIPT_DIR"
+if [ ! -f "$ASSET_DIRECTORY/runtime-manifest.json" ] ||
+    [ ! -f "$ASSET_DIRECTORY/requirements.lock" ]; then
+    REPOSITORY_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+    ASSET_DIRECTORY="$REPOSITORY_ROOT/helper"
+fi
+MANIFEST="$ASSET_DIRECTORY/runtime-manifest.json"
+REQUIREMENTS="$ASSET_DIRECTORY/requirements.lock"
+if [ ! -f "$MANIFEST" ] || [ ! -f "$REQUIREMENTS" ]; then
+    echo "Kotobane's pinned runtime manifest and requirements lock were not found." >&2
+    exit 1
+fi
 APP_SUPPORT_ROOT=${1:-"$HOME/Library/Application Support/Kotobane"}
 RUNTIME_DESTINATION="$APP_SUPPORT_ROOT/runtime"
 RUNTIME_READY="$RUNTIME_DESTINATION/ready.json"

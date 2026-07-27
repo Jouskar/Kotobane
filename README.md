@@ -57,6 +57,15 @@ Install the pinned local Python runtime from a repository checkout:
 scripts/bootstrap-helper.sh
 ```
 
+Or install it from the packaged app:
+
+```sh
+dist/Kotobane.app/Contents/Helpers/bootstrap-helper.sh
+```
+
+The packaged bootstrap script reads the pinned runtime manifest and dependency
+lock copied beside it in `Contents/Helpers`.
+
 This downloads a checksum-locked CPython 3.12 runtime and installs the
 hash-locked helper dependencies below
 `~/Library/Application Support/Kotobane/runtime`.
