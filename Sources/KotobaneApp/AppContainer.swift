@@ -128,7 +128,9 @@ final class AppContainer {
             let installer = ProcessModelInstaller(
                 pythonURL: directories.root
                     .appending(path: "runtime/venv/bin/python", directoryHint: .notDirectory),
-                installerScriptURL: bundledModelInstallerURL(fileManager: fileManager)
+                installerScriptURL: bundledModelInstallerURL(fileManager: fileManager),
+                runtimeBootstrapURL: bundledRuntimeBootstrapURL(fileManager: fileManager),
+                appSupportRoot: directories.root
             )
             let modelManager = ModelManager(
                 directories: directories,
@@ -508,6 +510,16 @@ final class AppContainer {
         return URL(fileURLWithPath: fileManager.currentDirectoryPath)
             .appending(path: "helper/model_install.py", directoryHint: .notDirectory)
     }
+
+    private static func bundledRuntimeBootstrapURL(fileManager: FileManager) -> URL {
+        let bundled = Bundle.main.bundleURL
+            .appending(path: "Contents/Helpers/bootstrap-helper.sh", directoryHint: .notDirectory)
+        if fileManager.fileExists(atPath: bundled.path) {
+            return bundled
+        }
+        return URL(fileURLWithPath: fileManager.currentDirectoryPath)
+            .appending(path: "scripts/bootstrap-helper.sh", directoryHint: .notDirectory)
+    }
 }
 
 private enum LocalDataDeletionError: Error {
@@ -518,82 +530,117 @@ private enum LocalDataDeletionError: Error {
 private final class ProcessModelInstaller: ModelInstallerRunning {
     private let pythonURL: URL
     private let installerScriptURL: URL
+    private let runtimeBootstrapURL: URL
+    private let appSupportRoot: URL
 
-    init(pythonURL: URL, installerScriptURL: URL) {
+    init(
+        pythonURL: URL,
+        installerScriptURL: URL,
+        runtimeBootstrapURL: URL,
+        appSupportRoot: URL
+    ) {
         self.pythonURL = pythonURL
         self.installerScriptURL = installerScriptURL
+        self.runtimeBootstrapURL = runtimeBootstrapURL
+        self.appSupportRoot = appSupportRoot
     }
 
     func run(_ request: ModelInstallRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            guard FileManager.default.isExecutableFile(atPath: pythonURL.path) else {
-                continuation.finish(
-                    throwing: ModelInstallerFailure(
-                        code: "runtime_unavailable",
-                        message: "Install Kotobane's local runtime before downloading a model."
-                    )
-                )
-                return
+            Task { @MainActor in
+                do {
+                    try await self.installRuntimeIfNeeded()
+                    self.startModelInstallation(request, continuation: continuation)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
             }
-            guard FileManager.default.fileExists(atPath: installerScriptURL.path) else {
-                continuation.finish(
-                    throwing: ModelInstallerFailure(
-                        code: "installer_unavailable",
-                        message: "The bundled model installer is missing."
-                    )
-                )
-                return
-            }
+        }
+    }
 
-            let process = Process()
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.executableURL = pythonURL
-            process.currentDirectoryURL = installerScriptURL.deletingLastPathComponent()
-            process.arguments = [
-                "-c",
-                Self.installProgram,
-                request.repository,
-                request.destinationURL.path,
-                String(request.expectedBytes),
-                String(request.availableBytes),
-            ]
-            process.standardOutput = stdout
-            process.standardError = stderr
+    private func installRuntimeIfNeeded() async throws {
+        guard !FileManager.default.isExecutableFile(atPath: pythonURL.path) else { return }
+        guard FileManager.default.isExecutableFile(atPath: runtimeBootstrapURL.path) else {
+            throw ModelInstallerFailure(
+                code: "runtime_bootstrap_unavailable",
+                message: "Kotobane's bundled local runtime installer is missing."
+            )
+        }
+
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = [runtimeBootstrapURL.path, appSupportRoot.path]
+        try await run(process, failureCode: "runtime_install_failed")
+
+        guard FileManager.default.isExecutableFile(atPath: pythonURL.path) else {
+            throw ModelInstallerFailure(
+                code: "runtime_install_failed",
+                message: "Kotobane's local runtime did not finish installing."
+            )
+        }
+    }
+
+    private func startModelInstallation(
+        _ request: ModelInstallRequest,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) {
+        guard FileManager.default.fileExists(atPath: installerScriptURL.path) else {
+            continuation.finish(
+                throwing: ModelInstallerFailure(
+                    code: "installer_unavailable",
+                    message: "The bundled model installer is missing."
+                )
+            )
+            return
+        }
+
+        let process = Process()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.executableURL = pythonURL
+        process.currentDirectoryURL = installerScriptURL.deletingLastPathComponent()
+        process.arguments = [
+            "-c", Self.installProgram, request.repository, request.destinationURL.path,
+            String(request.expectedBytes), String(request.availableBytes),
+        ]
+        process.standardOutput = stdout
+        process.standardError = stderr
+        process.terminationHandler = { process in
+            let output = stdout.fileHandleForReading.readDataToEndOfFile()
+            let diagnostics = stderr.fileHandleForReading.readDataToEndOfFile()
+            if process.terminationStatus == 0 {
+                for line in String(decoding: output, as: UTF8.self).split(whereSeparator: \.isNewline) {
+                    continuation.yield(String(line))
+                }
+                continuation.finish()
+            } else {
+                let message = String(decoding: diagnostics, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                continuation.finish(throwing: ModelInstallerFailure(
+                    code: "installer_failed",
+                    message: message.isEmpty ? "The model installer exited with status \(process.terminationStatus)." : message
+                ))
+            }
+        }
+        continuation.onTermination = { _ in
+            if process.isRunning { process.terminate() }
+        }
+        do { try process.run() } catch { continuation.finish(throwing: error) }
+    }
+
+    private func run(_ process: Process, failureCode: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             process.terminationHandler = { process in
-                let output = stdout.fileHandleForReading.readDataToEndOfFile()
-                let diagnostics = stderr.fileHandleForReading.readDataToEndOfFile()
                 if process.terminationStatus == 0 {
-                    let lines = String(decoding: output, as: UTF8.self)
-                        .split(whereSeparator: \.isNewline)
-                    for line in lines {
-                        continuation.yield(String(line))
-                    }
-                    continuation.finish()
+                    continuation.resume()
                 } else {
-                    let message = String(decoding: diagnostics, as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    continuation.finish(
-                        throwing: ModelInstallerFailure(
-                            code: "installer_failed",
-                            message: message.isEmpty
-                                ? "The model installer exited with status \(process.terminationStatus)."
-                                : message
-                        )
-                    )
+                    continuation.resume(throwing: ModelInstallerFailure(
+                        code: failureCode,
+                        message: "Kotobane's local runtime installer exited with status \(process.terminationStatus)."
+                    ))
                 }
             }
-            continuation.onTermination = { _ in
-                if process.isRunning {
-                    process.terminate()
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.finish(throwing: error)
-            }
+            do { try process.run() } catch { continuation.resume(throwing: error) }
         }
     }
 
