@@ -30,6 +30,10 @@ struct MenuBarContent: View {
 
             Divider()
 
+            Button("Open Capture Desk") {
+                openWindow(id: "desk")
+            }
+
             Menu("Recent Captures") {
                 if container.history.isEmpty {
                     Text("No captures yet")

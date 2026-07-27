@@ -15,6 +15,11 @@ struct KotobaneApp: App {
         }
         .menuBarExtraStyle(.menu)
 
+        Window("Kotobane", id: "desk") {
+            CaptureDeskWindow(container: container)
+        }
+        .defaultSize(width: 760, height: 560)
+
         Window("Capture Review", id: "review") {
             ReviewWindow(container: container)
         }

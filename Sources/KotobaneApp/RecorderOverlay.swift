@@ -19,13 +19,9 @@ struct RecorderOverlay: View {
                     Text(elapsed)
                         .font(.system(.body, design: .monospaced))
                 }
-                ProgressView(value: Double(snapshot.rmsLevel), total: 1)
-                    .progressViewStyle(.linear)
-                    .tint(.red)
-                    .accessibilityLabel("Microphone level")
-                    .accessibilityValue("\(Int(snapshot.rmsLevel * 100)) percent")
+                RecordingWaveform(rmsLevel: snapshot.rmsLevel)
             }
-            .frame(width: 190)
+            .frame(width: 240)
 
             Button("Cancel", role: .cancel) {
                 Task { await container.cancelCapture() }
