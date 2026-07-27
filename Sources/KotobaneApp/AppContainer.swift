@@ -7,6 +7,13 @@ import KotobaneCore
 @MainActor
 @Observable
 final class AppContainer {
+    enum SettingsTab: Hashable {
+        case general
+        case models
+        case destinations
+        case privacy
+    }
+
     enum Notice: Equatable {
         case success(String)
         case warning(String)
@@ -30,6 +37,7 @@ final class AppContainer {
     var shortcutFailure: String?
     var historyFailure: String?
     var settingsFailure: String?
+    var settingsTab: SettingsTab = .general
     var modelRemovalConfirmation: ModelChoice?
     var historyDeletionConfirmation: Capture?
     var fullDataDeletionConfirmation = false
@@ -344,6 +352,11 @@ final class AppContainer {
 
     func showSettings() {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
+
+    func showModelSettings() {
+        settingsTab = .models
+        showSettings()
     }
 
     func installSelectedModel() {

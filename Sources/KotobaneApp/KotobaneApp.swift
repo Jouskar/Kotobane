@@ -13,6 +13,7 @@ struct KotobaneApp: App {
         ) {
             MenuBarContent(container: container)
         }
+        .menuBarExtraStyle(.menu)
 
         Window("Capture Review", id: "review") {
             ReviewWindow(container: container)

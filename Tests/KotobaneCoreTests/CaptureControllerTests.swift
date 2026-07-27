@@ -142,11 +142,33 @@ import Testing
 }
 
 @MainActor
-@Test func transcriptionFailurePreservesAudioAndRetryCanReachReview() async throws {
+@Test func missingModelOffersTypedSettingsRecoveryAndPreservesAudio() async throws {
     let engine = ScriptedTranscriptionEngine([
         .failure(TranscriptionFailure.helperRejected(
             code: "model_unavailable",
             message: "Install the model."
+        )),
+    ])
+    let fixture = CaptureFixture(engine: engine)
+
+    await fixture.controller.start()
+    await fixture.controller.stop()
+
+    let failure = try #require(fixture.controller.state.failure)
+    #expect(failure.kind == .modelUnavailable)
+    #expect(failure.recovery == .openModelSettings)
+    #expect(failure.message == "Model not installed. Install it in Settings before retrying.")
+    #expect(failure.preservedAudioURL == fixture.temporaryURL)
+    #expect(fixture.files.deletedURLs.isEmpty)
+    #expect(!fixture.events.values.contains("delete-audio"))
+}
+
+@MainActor
+@Test func otherTranscriptionFailurePreservesAudioAndRetryCanReachReview() async throws {
+    let engine = ScriptedTranscriptionEngine([
+        .failure(TranscriptionFailure.helperRejected(
+            code: "helper_busy",
+            message: "Try again."
         )),
         .success(.fixture(text: "Kurtarıldı")),
     ])

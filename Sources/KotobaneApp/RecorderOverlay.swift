@@ -10,7 +10,6 @@ struct RecorderOverlay: View {
             Image(systemName: "waveform.circle.fill")
                 .font(.system(size: 28))
                 .foregroundStyle(.red)
-                .symbolEffect(.pulse)
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -46,6 +45,10 @@ struct RecorderOverlay: View {
         }
         .shadow(radius: 18, y: 8)
         .padding(18)
+        .frame(
+            width: AppPresentation.recorderOverlayWidth,
+            height: AppPresentation.recorderOverlayHeight
+        )
     }
 
     private var snapshot: RecordingSnapshot {
@@ -69,7 +72,12 @@ final class RecorderOverlayPresenter {
                 rootView: RecorderOverlay(container: container)
             )
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 110),
+                contentRect: NSRect(
+                    x: 0,
+                    y: 0,
+                    width: AppPresentation.recorderOverlayWidth,
+                    height: AppPresentation.recorderOverlayHeight
+                ),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
@@ -107,4 +115,10 @@ final class RecorderOverlayPresenter {
         )
         panel.setFrameOrigin(origin)
     }
+}
+
+enum AppPresentation {
+    static let menuWidth: CGFloat = 320
+    static let recorderOverlayWidth: CGFloat = 620
+    static let recorderOverlayHeight: CGFloat = 150
 }

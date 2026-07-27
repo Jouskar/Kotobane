@@ -319,7 +319,7 @@ public final class CaptureController {
             failTranscription(
                 recording,
                 captureID: captureID,
-                message: failureMessage(error)
+                error: error
             )
         }
     }
@@ -451,6 +451,34 @@ public final class CaptureController {
         )
     }
 
+    private func failTranscription(
+        _ recording: AudioRecording,
+        captureID: UUID,
+        error: Error
+    ) {
+        if let transcriptionFailure = error as? TranscriptionFailure,
+           case .helperRejected(let code, _) = transcriptionFailure,
+           code == "model_unavailable" {
+            operationID = nil
+            retryContext = .transcribe(recording, captureID)
+            state = .failed(
+                CaptureFailure(
+                    kind: .modelUnavailable,
+                    recovery: .openModelSettings,
+                    message: "Model not installed. Install it in Settings before retrying.",
+                    preservedAudioURL: recording.fileURL
+                )
+            )
+            return
+        }
+
+        failTranscription(
+            recording,
+            captureID: captureID,
+            message: failureMessage(error)
+        )
+    }
+
     private func removeInvalidTemporaryAudio(at url: URL) {
         try? audioFiles.removeTemporaryAudio(at: url)
         temporaryURL = nil
@@ -486,6 +514,7 @@ public struct CaptureFailure: Equatable, Sendable {
         case noInputDevice
         case recordingFailed
         case emptyRecording
+        case modelUnavailable
         case transcriptionFailed
         case persistenceFailed
         case retentionFailed
@@ -493,6 +522,7 @@ public struct CaptureFailure: Equatable, Sendable {
 
     public enum Recovery: Equatable, Sendable {
         case openMicrophoneSettings
+        case openModelSettings
         case retryRecording
         case retryTranscription
         case retryRetention

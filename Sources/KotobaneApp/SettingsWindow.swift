@@ -5,23 +5,27 @@ struct SettingsWindow: View {
     @Bindable var container: AppContainer
 
     var body: some View {
-        TabView {
+        TabView(selection: $container.settingsTab) {
             general
+                .tag(AppContainer.SettingsTab.general)
                 .tabItem {
                     Label("General", systemImage: "gearshape")
                 }
 
             ModelSetupView(container: container)
+                .tag(AppContainer.SettingsTab.models)
                 .tabItem {
                     Label("Models", systemImage: "externaldrive")
                 }
 
             destinations
+                .tag(AppContainer.SettingsTab.destinations)
                 .tabItem {
                     Label("Destinations", systemImage: "arrow.up.forward.app")
                 }
 
             privacy
+                .tag(AppContainer.SettingsTab.privacy)
                 .tabItem {
                     Label("Privacy", systemImage: "hand.raised")
                 }

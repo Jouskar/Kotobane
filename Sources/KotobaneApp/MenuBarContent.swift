@@ -63,6 +63,7 @@ struct MenuBarContent: View {
             }
             container.reloadHistory()
         }
+        .frame(width: AppPresentation.menuWidth)
     }
 
     @ViewBuilder
@@ -109,6 +110,13 @@ struct MenuBarContent: View {
                 container.openMicrophoneSettings()
             }
             Button("Try Again") {
+                Task { await container.retryCapture() }
+            }
+        case .openModelSettings:
+            Button("Install Model…") {
+                container.showModelSettings()
+            }
+            Button("Retry") {
                 Task { await container.retryCapture() }
             }
         case .retryRecording, .retryTranscription, .retryRetention:
