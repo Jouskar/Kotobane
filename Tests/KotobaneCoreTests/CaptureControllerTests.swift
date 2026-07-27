@@ -326,6 +326,35 @@ import Testing
     #expect(formatTag == 1)
 }
 
+@Test func audioTapCallbackForwardsOffMainActorWithoutExecutorRequirement() async throws {
+    let observation = TapCallbackObservation()
+    let callback = AVAudioEngineRecorder.makeRealtimeTapCallback { buffer in
+        observation.record(
+            frameCapacity: buffer.frameCapacity,
+            ranOnMainThread: Thread.isMainThread
+        )
+    }
+    let callbackBox = UncheckedSendableTapCallback(callback)
+
+    try await Task.detached {
+        let format = try #require(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 48_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+        let buffer = try #require(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 32)
+        )
+        callbackBox.callback(buffer, AVAudioTime(hostTime: 0))
+    }.value
+
+    #expect(observation.frameCapacity == 32)
+    #expect(observation.ranOnMainThread == false)
+}
+
 @MainActor
 @Test func audioFileManagerRejectsOutsideDeletionWithoutChangingTheFile() throws {
     let root = FileManager.default.temporaryDirectory
@@ -689,6 +718,35 @@ private final class SpyCaptureAudioFiles: CaptureAudioFileManaging {
 private enum CaptureFixtureError: Error {
     case persistence
     case retention
+}
+
+private final class TapCallbackObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedFrameCapacity: AVAudioFrameCount?
+    private var recordedMainThread: Bool?
+
+    var frameCapacity: AVAudioFrameCount? {
+        lock.withLock { recordedFrameCapacity }
+    }
+
+    var ranOnMainThread: Bool? {
+        lock.withLock { recordedMainThread }
+    }
+
+    func record(frameCapacity: AVAudioFrameCount, ranOnMainThread: Bool) {
+        lock.withLock {
+            recordedFrameCapacity = frameCapacity
+            recordedMainThread = ranOnMainThread
+        }
+    }
+}
+
+private struct UncheckedSendableTapCallback: @unchecked Sendable {
+    let callback: AVAudioNodeTapBlock
+
+    init(_ callback: @escaping AVAudioNodeTapBlock) {
+        self.callback = callback
+    }
 }
 
 private extension TranscriptionResult {

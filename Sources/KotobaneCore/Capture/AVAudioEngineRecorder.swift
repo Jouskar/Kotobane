@@ -80,13 +80,15 @@ public final class AVAudioEngineRecorder: AudioRecordingManaging {
         }
         self.session = session
 
+        let tapCallback = Self.makeRealtimeTapCallback { [session] buffer in
+            session.consume(buffer)
+        }
         input.installTap(
             onBus: 0,
             bufferSize: 1_024,
-            format: inputFormat
-        ) { buffer, _ in
-            session.consume(buffer)
-        }
+            format: inputFormat,
+            block: tapCallback
+        )
         tapInstalled = true
 
         do {
@@ -112,6 +114,14 @@ public final class AVAudioEngineRecorder: AudioRecordingManaging {
         engine.reset()
         self.session = nil
         return try session.finish()
+    }
+
+    nonisolated static func makeRealtimeTapCallback(
+        forwarding consume: @escaping @Sendable (AVAudioPCMBuffer) -> Void
+    ) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            consume(buffer)
+        }
     }
 
     isolated deinit {
