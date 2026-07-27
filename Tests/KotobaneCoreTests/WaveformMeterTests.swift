@@ -12,3 +12,9 @@ import Testing
 @Test func silentInputUsesMinimumBars() {
     #expect(WaveformMeter.bars(rmsLevel: 0, count: 4, phase: 0) == [0.08, 0.08, 0.08, 0.08])
 }
+
+@Test func normalSpeechLevelProducesVisibleBarVariation() {
+    let bars = WaveformMeter.bars(rmsLevel: 0.01, count: 16, phase: 0)
+
+    #expect((bars.max() ?? 0) - (bars.min() ?? 0) >= 0.1)
+}

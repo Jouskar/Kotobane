@@ -8,10 +8,12 @@ public enum WaveformMeter {
     ) -> [Double] {
         guard count > 0 else { return [] }
 
-        let level = min(1, max(0, Double(rmsLevel)))
-        guard level > 0 else {
+        let rawLevel = min(1, max(0, Double(rmsLevel)))
+        guard rawLevel > 0 else {
             return Array(repeating: 0.08, count: count)
         }
+
+        let level = min(1, sqrt(rawLevel) * 3)
 
         return (0..<count).map { index in
             let position = Double(index) / Double(count)
