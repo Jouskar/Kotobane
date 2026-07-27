@@ -308,6 +308,10 @@ import Testing
     #expect(settings[AVLinearPCMIsBigEndianKey] as? Bool == false)
 }
 
+@Test func recorderUsesQwenCompatibleSixteenKilohertzOutput() {
+    #expect(PCMInt16WAV.transcriptionSampleRate == 16_000)
+}
+
 @Test func recorderSettingsProduceAnIntegerPCMWAVReadableByTheFastPath() throws {
     let directory = FileManager.default.temporaryDirectory
         .appending(path: UUID().uuidString, directoryHint: .isDirectory)

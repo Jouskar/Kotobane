@@ -2,6 +2,8 @@
 import Foundation
 
 public enum PCMInt16WAV {
+    public static let transcriptionSampleRate = 16_000.0
+
     public static func settings(
         sampleRate: Double,
         channelCount: AVAudioChannelCount
@@ -150,7 +152,7 @@ private final class AudioTapSession: @unchecked Sendable {
     ) throws {
         guard let outputFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
-            sampleRate: inputFormat.sampleRate,
+            sampleRate: PCMInt16WAV.transcriptionSampleRate,
             channels: inputFormat.channelCount,
             interleaved: false
         ), let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
@@ -160,7 +162,7 @@ private final class AudioTapSession: @unchecked Sendable {
         self.file = try AVAudioFile(
             forWriting: url,
             settings: PCMInt16WAV.settings(
-                sampleRate: inputFormat.sampleRate,
+                sampleRate: PCMInt16WAV.transcriptionSampleRate,
                 channelCount: inputFormat.channelCount
             ),
             commonFormat: .pcmFormatInt16,
