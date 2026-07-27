@@ -103,11 +103,36 @@ public struct SandboxExecNetworkIsolation: HelperProcessIsolating {
 
     public init(
         sandboxExecutableURL: URL = URL(fileURLWithPath: "/usr/bin/sandbox-exec"),
-        launchShimExecutableURL: URL = Bundle.main.bundleURL
-            .appending(path: "Contents/Helpers/kotobane-launch-shim")
+        launchShimExecutableURL: URL? = nil
     ) {
         self.sandboxExecutableURL = sandboxExecutableURL
         self.launchShimExecutableURL = launchShimExecutableURL
+            ?? Self.defaultLaunchShimURL()
+    }
+
+    static func defaultLaunchShimURL(
+        bundleURL: URL = Bundle.main.bundleURL,
+        executableURL: URL? = Bundle.main.executableURL,
+        isExecutable: (URL) -> Bool = {
+            FileManager.default.isExecutableFile(atPath: $0.path)
+        }
+    ) -> URL {
+        let packaged = bundleURL
+            .appending(path: "Contents/Helpers/kotobane-launch-shim")
+        if isExecutable(packaged) {
+            return packaged
+        }
+
+        if let executableURL {
+            let sibling = executableURL
+                .deletingLastPathComponent()
+                .appending(path: "kotobane-launch-shim")
+            if isExecutable(sibling) {
+                return sibling
+            }
+        }
+
+        return packaged
     }
 
     public func command(for helperExecutableURL: URL) throws -> HelperProcessCommand {

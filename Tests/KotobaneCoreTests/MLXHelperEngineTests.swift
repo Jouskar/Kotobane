@@ -512,6 +512,21 @@ func protocolFailuresAreNeverRetried(_ stdout: Data) async throws {
     #expect(command.execStatusDescriptor == 64)
 }
 
+@Test func developmentIsolationUsesLaunchShimBesideSwiftPMExecutable() {
+    let executable = URL(fileURLWithPath: "/tmp/.build/arm64-apple-macosx/debug/Kotobane")
+    let expected = executable
+        .deletingLastPathComponent()
+        .appending(path: "kotobane-launch-shim")
+
+    let resolved = SandboxExecNetworkIsolation.defaultLaunchShimURL(
+        bundleURL: URL(fileURLWithPath: "/tmp/.build/arm64-apple-macosx/debug"),
+        executableURL: executable,
+        isExecutable: { $0 == expected }
+    )
+
+    #expect(resolved == expected)
+}
+
 @Test func productionSandboxStrategyRunsHelperOnlyAfterIsolationHandshake() async throws {
     let fixture = try AudioFixture(named: "production-wrapper.wav")
     defer { fixture.remove() }
