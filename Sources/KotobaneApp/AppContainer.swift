@@ -284,12 +284,19 @@ final class AppContainer {
             intent: capture.intent,
             transcript: capture.transcript
         )
+        let pasteAfterOpening: Bool
+        if selectedDestination == .claude {
+            _ = pasteAutomator.isTrusted(promptIfNeeded: true)
+            pasteAfterOpening = true
+        } else {
+            pasteAfterOpening = settings.pasteAfterOpening
+        }
         Task {
             do {
                 let result = try await handoff.perform(
                     brief: brief,
                     destination: selectedDestination,
-                    pasteAfterOpening: settings.pasteAfterOpening
+                    pasteAfterOpening: pasteAfterOpening
                 )
                 notice = handoffNotice(result)
             } catch {

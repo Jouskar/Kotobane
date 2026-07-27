@@ -2,6 +2,11 @@ import Foundation
 import Testing
 @testable import KotobaneCore
 
+@Test func claudeUsesTheInstalledDesktopBundleIdentifier() {
+    #expect(Destination.claude.bundleIdentifier == "com.anthropic.claudefordesktop")
+    #expect(Destination.claude.url == URL(string: "https://claude.ai/new"))
+}
+
 @MainActor
 @Test func codexCopiesBeforeOpening() async throws {
     let events = HandoffEventRecorder()

@@ -18,7 +18,7 @@ public enum Destination: String, CaseIterable, Codable, Equatable, Sendable {
     public var bundleIdentifier: String? {
         switch self {
         case .codex: "com.openai.codex"
-        case .claude: "com.anthropic.claude"
+        case .claude: "com.anthropic.claudefordesktop"
         case .clipboard, .markdown: nil
         }
     }
