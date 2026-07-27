@@ -141,6 +141,7 @@ import Testing
         "copy:brief",
         "open:claude",
         "paste-trust-check:no-prompt",
+        "new-chat",
         "paste",
     ])
     #expect(result == .pasted)
@@ -477,6 +478,11 @@ private struct HandoffSpyPaste: PasteAutomating {
     func isTrusted(promptIfNeeded: Bool) -> Bool {
         events.record("paste-trust-check:\(promptIfNeeded ? "prompt" : "no-prompt")")
         return trusted
+    }
+
+    func newChat() -> Bool {
+        events.record("new-chat")
+        return succeeds
     }
 
     func paste() -> Bool {

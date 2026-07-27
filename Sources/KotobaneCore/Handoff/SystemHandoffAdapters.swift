@@ -198,6 +198,7 @@ struct ApplicationActivationWaiter {
 @MainActor
 public struct SystemPasteAutomator: PasteAutomating {
     private let trustChecking: @MainActor (Bool) -> Bool
+    private let commandNPosting: @MainActor () -> Bool
     private let commandVPosting: @MainActor () -> Bool
 
     public init() {
@@ -208,15 +209,18 @@ public struct SystemPasteAutomator: PasteAutomating {
                     [promptKey: promptIfNeeded] as CFDictionary
                 )
             },
+            commandNPosting: Self.postCommandN,
             commandVPosting: Self.postCommandV
         )
     }
 
     init(
         trustChecking: @escaping @MainActor (Bool) -> Bool,
+        commandNPosting: @escaping @MainActor () -> Bool = { true },
         commandVPosting: @escaping @MainActor () -> Bool
     ) {
         self.trustChecking = trustChecking
+        self.commandNPosting = commandNPosting
         self.commandVPosting = commandVPosting
     }
 
@@ -228,16 +232,28 @@ public struct SystemPasteAutomator: PasteAutomating {
         commandVPosting()
     }
 
+    public func newChat() -> Bool {
+        commandNPosting()
+    }
+
+    private static func postCommandN() -> Bool {
+        postCommandKey(CGKeyCode(45))
+    }
+
     private static func postCommandV() -> Bool {
+        postCommandKey(CGKeyCode(9))
+    }
+
+    private static func postCommandKey(_ key: CGKeyCode) -> Bool {
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let keyDown = CGEvent(
             keyboardEventSource: source,
-            virtualKey: CGKeyCode(9),
+            virtualKey: key,
             keyDown: true
         ),
         let keyUp = CGEvent(
             keyboardEventSource: source,
-            virtualKey: CGKeyCode(9),
+            virtualKey: key,
             keyDown: false
         )
         else {

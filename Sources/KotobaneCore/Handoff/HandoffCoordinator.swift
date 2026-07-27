@@ -13,6 +13,7 @@ public protocol DestinationOpening {
 @MainActor
 public protocol PasteAutomating {
     func isTrusted(promptIfNeeded: Bool) -> Bool
+    func newChat() -> Bool
     func paste() -> Bool
 }
 
@@ -82,6 +83,9 @@ public struct HandoffCoordinator {
             }
             guard paste.isTrusted(promptIfNeeded: false) else {
                 return .manualPasteRequired(reason: .accessibilityDenied)
+            }
+            if destination == .claude, !paste.newChat() {
+                return .manualPasteRequired(reason: .pasteFailed)
             }
             guard paste.paste() else {
                 return .manualPasteRequired(reason: .pasteFailed)
