@@ -4,4 +4,5 @@ public enum CaptureIntent: String, CaseIterable, Codable, Equatable, Sendable {
     case projectIdea
     case meetingNote
     case freeform
+    case transcriptOnly
 }
