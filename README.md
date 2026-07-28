@@ -1,158 +1,118 @@
 # Kotobane
 
-Kotobane is a local-first macOS menu-bar app for capturing an explicit voice
-note, transcribing it with Qwen3-ASR, reviewing the transcript, and preparing a
-deterministic Markdown handoff for Codex, Claude, the clipboard, or a file.
-Turkish is the default language hint.
+> A local-first voice capture and handoff tool for macOS.
 
-> Current prerelease: **0.1.0-beta.3**. This beta is for local testing and is
-> not yet Developer ID signed or notarized.
+Kotobane captures an explicit spoken thought, transcribes it locally with
+Qwen3-ASR, and prepares an editable handoff for Codex, Claude, the clipboard,
+or a Markdown file. Turkish is the default language hint.
+
+![Status](https://img.shields.io/badge/status-0.1.0--beta.3-7c3aed)
+![Platform](https://img.shields.io/badge/macOS-14%2B-111827)
+![Architecture](https://img.shields.io/badge/Apple%20silicon-arm64-f59e0b)
+[![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 
 ## Download
 
-Download [Kotobane 0.1.0-beta.3](https://github.com/Jouskar/Kotobane/releases/download/v0.1.0-beta.3/Kotobane-0.1.0-beta.3.zip),
-unzip it, and move `Kotobane.app` to Applications. This build supports
-Apple-silicon Macs running macOS 14 or newer.
+[Download Kotobane 0.1.0-beta.3](https://github.com/Jouskar/Kotobane/releases/download/v0.1.0-beta.3/Kotobane-0.1.0-beta.3.zip)
 
-Because the beta is not notarized, macOS may block the first launch. In Finder,
-Control-click `Kotobane.app`, choose **Open**, then confirm **Open** again.
-You only need to do this once.
+1. Unzip the download.
+2. Move `Kotobane.app` to Applications.
+3. On first launch, Control-click the app in Finder and choose **Open**.
+4. Confirm **Open** in the Gatekeeper dialog.
 
-Kotobane does not continuously listen, capture system audio, send audio to a
-hosted transcription service, rewrite transcripts with an LLM, create an
-account, synchronize data, collect telemetry, or include a cloud fallback.
+This beta is ad-hoc signed and not notarized. It requires an Apple-silicon Mac
+running macOS 14 Sonoma or newer.
 
-## Requirements
+## Why Kotobane?
 
-- An Apple-silicon Mac (`arm64`)
-- macOS 14 Sonoma or newer
-- Apple Command Line Tools with Swift 6.3
-- Internet access during the explicit runtime and model installation steps
+Thinking out loud is often faster than structuring an idea. Kotobane preserves
+that first draft locally, then gives you a clean, editable handoff for the tool
+where the real reasoning happens.
 
-Install the Command Line Tools if needed:
+## Workflow
 
-```sh
-xcode-select --install
+```text
+Capture → Local transcription → Review and edit → Deterministic handoff
 ```
 
-The repository and packaged app intentionally contain no Python runtime, model
-weights, recordings, transcripts, or captures.
+1. Start capture with the configurable global shortcut.
+2. Speak while the compact overlay shows duration and microphone level.
+3. Stop capture and wait for local Qwen3-ASR transcription.
+4. Edit the transcript and select an intent.
+5. Copy or export the result, or open Codex/Claude for handoff.
 
-## Build and package
+## Intent options
 
-From the repository root:
+| Intent | Output |
+| --- | --- |
+| Transcript only | The edited transcript exactly as written; no wrapper or additions. |
+| Brainstorm | Summary, decisions, open questions, and recommended next actions. |
+| Task | Task summary, acceptance criteria, constraints, and next actions. |
+| Project idea | Problem, outcome, scope, assumptions, risks, and validation steps. |
+| Meeting note | Summary, decisions, action items, owners, and follow-up. |
+| Freeform | Key points, open questions, and a recommended next action. |
+
+## Local-first by design
+
+Kotobane records only during an explicit capture. Audio is transcribed on the
+Mac through Qwen3-ASR and is deleted after successful transcription by default.
+You can retain recordings locally, delete individual captures, or delete all
+local data from Settings.
+
+Kotobane has no account, cloud sync, telemetry, continuous listening, system
+audio capture, hosted transcription, LLM rewriting, or cloud fallback.
+
+The only intentional outbound actions are user-triggered text export or opening
+the selected Codex/Claude destination. Text submitted there follows that
+product’s own policies.
+
+## First-run setup
+
+Open Settings and install the local runtime and one of the supported models:
+
+- Qwen3-ASR 0.6B (recommended): approximately 1.88 GB.
+- Qwen3-ASR 1.7B (accuracy mode): approximately 4.70 GB.
+
+Microphone permission is requested before the first recording. Accessibility is
+optional and is requested only for automated paste after opening a destination.
+
+## Build from source
+
+Requirements:
+
+- Apple-silicon Mac (`arm64`)
+- macOS 14 Sonoma or newer
+- Swift 6.3 and Apple Command Line Tools
 
 ```sh
-swift build --product Kotobane
+git clone https://github.com/Jouskar/Kotobane.git
+cd Kotobane
+git switch develop
+swift run Kotobane
+```
+
+Package a local app bundle with:
+
+```sh
 scripts/package-app.sh
 open dist/Kotobane.app
 ```
 
-`scripts/package-app.sh` builds both release executables, creates
-`dist/Kotobane.app`, copies the helper assets, and applies an ad-hoc signature.
-It refuses to package on a non-arm64 host.
+The packaging script creates an ad-hoc-signed app and refuses to package on a
+non-arm64 host. Run `scripts/verify.sh` for the complete local verification
+gate.
 
-To run the complete deterministic local gate:
+## Project status
 
-```sh
-scripts/verify.sh
-```
+Kotobane is beta software. Current support is limited to Apple-silicon Macs and
+macOS 14+. Model weights are not included in the repository or app download;
+they are installed after explicit user confirmation according to their upstream
+licenses.
 
-The gate runs the Swift and Python tests, release builds, packaging, property
-list validation, signature verification, helper-isolation checks, and a signed
-entitlement check that rejects network client or server access.
+## Contributing and licensing
 
-## First-run setup
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md),
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and the [Git Flow guide](docs/GIT_FLOW.md).
 
-Install the pinned local Python runtime from a repository checkout:
-
-```sh
-scripts/bootstrap-helper.sh
-```
-
-Or install it from the packaged app:
-
-```sh
-dist/Kotobane.app/Contents/Helpers/bootstrap-helper.sh
-```
-
-The packaged bootstrap script reads the pinned runtime manifest and dependency
-lock copied beside it in `Contents/Helpers`.
-
-This downloads a checksum-locked CPython 3.12 runtime and installs the
-hash-locked helper dependencies below
-`~/Library/Application Support/Kotobane/runtime`.
-
-Open Kotobane's settings, choose a model, and select **Install Model**. The
-recommended Qwen3-ASR 0.6B download is about 1.88 GB; the optional 1.7B model is
-about 4.70 GB. Before downloading, Kotobane shows the expected size and minimum
-free-space requirement. The capacity check includes a safety margin of the
-larger of 1 GiB or ten percent of the model size. An interrupted download stays
-in staging and is never activated as a ready model.
-
-Model installation is the only model-related network operation. Transcription
-runs through a child process placed in an explicit deny-network sandbox.
-
-## Permissions
-
-Kotobane asks for microphone access immediately before the first recording.
-If access is denied, enable Kotobane in **System Settings → Privacy & Security
-→ Microphone**.
-
-Accessibility access is optional and is requested only when automatic paste is
-enabled. Without it, Kotobane still copies the complete brief and opens the
-selected destination for manual paste. Clipboard and Markdown export do not
-require Accessibility access.
-
-## Local data and privacy
-
-Kotobane stores private data beneath:
-
-```text
-~/Library/Application Support/Kotobane/
-├── captures/       transcript metadata and retained WAV recordings
-├── models/         explicitly downloaded Qwen3-ASR models
-├── runtime/        pinned Python runtime and virtual environment
-└── settings.json   local preferences
-```
-
-Temporary capture files also remain inside Kotobane's private Application
-Support area. macOS may maintain ordinary transient app data in the user's
-Library caches.
-
-By default, raw audio is deleted only after the transcript is persisted
-successfully. If audio retention is enabled, the recording remains with the
-capture until that capture is deleted. Failed or interrupted transcription
-preserves the temporary recording for recovery.
-
-Settings offers **Delete All Local Data**, which removes captures, retained and
-temporary audio, and downloaded models after confirmation. The runtime can be
-removed separately:
-
-```sh
-rm -rf "$HOME/Library/Application Support/Kotobane/runtime"
-```
-
-Only run that command when Kotobane is closed and you intend to remove its local
-runtime. Removing the entire
-`~/Library/Application Support/Kotobane` directory deletes all Kotobane data.
-
-Audio and transcripts remain on this Mac until you explicitly export or send
-text. Text handed to Codex, Claude, or another destination is then governed by
-that product's separate privacy, retention, and account policies.
-
-## Gatekeeper and distribution
-
-The packaging script creates an ad-hoc-signed build for local development. It
-is not Developer ID signed, notarized, or intended for the Mac App Store.
-Gatekeeper can therefore warn about or block a copy received from another Mac.
-Prefer building from a trusted checkout. After verifying the source, use
-Finder's **Open** context-menu action or the **Open Anyway** control in
-**System Settings → Privacy & Security** if macOS offers it. Do not disable
-Gatekeeper system-wide.
-
-## License
-
-Kotobane is available under the [MIT License](LICENSE). Qwen3-ASR, MLX, and the
-pinned Python helper dependencies retain their own licenses; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Kotobane is available under the [MIT License](LICENSE). Third-party components
+retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
