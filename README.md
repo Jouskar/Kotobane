@@ -5,12 +5,12 @@ note, transcribing it with Qwen3-ASR, reviewing the transcript, and preparing a
 deterministic Markdown handoff for Codex, Claude, the clipboard, or a file.
 Turkish is the default language hint.
 
-> Current prerelease: **0.1.0-beta.2**. This beta is for local testing and is
+> Current prerelease: **0.1.0-beta.3**. This beta is for local testing and is
 > not yet Developer ID signed or notarized.
 
 ## Download
 
-Download [Kotobane 0.1.0-beta.2](https://github.com/Jouskar/Kotobane/releases/download/v0.1.0-beta.2/Kotobane-0.1.0-beta.2.zip),
+Download [Kotobane 0.1.0-beta.3](https://github.com/Jouskar/Kotobane/releases/download/v0.1.0-beta.3/Kotobane-0.1.0-beta.3.zip),
 unzip it, and move `Kotobane.app` to Applications. This build supports
 Apple-silicon Macs running macOS 14 or newer.
 
