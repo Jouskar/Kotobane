@@ -5,7 +5,7 @@ note, transcribing it with Qwen3-ASR, reviewing the transcript, and preparing a
 deterministic Markdown handoff for Codex, Claude, the clipboard, or a file.
 Turkish is the default language hint.
 
-> Current prerelease: **0.1.0-beta.1**. This beta is for local testing and is
+> Current prerelease: **0.1.0-beta.2**. This beta is for local testing and is
 > not yet Developer ID signed or notarized.
 
 Kotobane does not continuously listen, capture system audio, send audio to a

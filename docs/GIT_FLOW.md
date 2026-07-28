@@ -18,8 +18,8 @@ Kotobane uses a lightweight Git Flow model.
 
 ## First release
 
-The current baseline is **0.1.0-beta.1** and is tagged as `v0.1.0-beta.1` on
-`main`. The active release branch is `release/0.1.0-beta.1`; after it is
+The current baseline is **0.1.0-beta.2** and is tagged as `v0.1.0-beta.2` on
+`main`. The active release branch is `release/0.1.0-beta.2`; after it is
 merged, ongoing work continues from `develop` through feature branches.
 
 ## Example commands
