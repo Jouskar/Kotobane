@@ -8,6 +8,16 @@ Turkish is the default language hint.
 > Current prerelease: **0.1.0-beta.2**. This beta is for local testing and is
 > not yet Developer ID signed or notarized.
 
+## Download
+
+Download [Kotobane 0.1.0-beta.2](https://github.com/Jouskar/Kotobane/releases/download/v0.1.0-beta.2/Kotobane-0.1.0-beta.2.zip),
+unzip it, and move `Kotobane.app` to Applications. This build supports
+Apple-silicon Macs running macOS 14 or newer.
+
+Because the beta is not notarized, macOS may block the first launch. In Finder,
+Control-click `Kotobane.app`, choose **Open**, then confirm **Open** again.
+You only need to do this once.
+
 Kotobane does not continuously listen, capture system audio, send audio to a
 hosted transcription service, rewrite transcripts with an LLM, create an
 account, synchronize data, collect telemetry, or include a cloud fallback.
