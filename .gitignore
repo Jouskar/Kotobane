@@ -5,6 +5,7 @@
 *.xcuserstate
 Models/
 .venv/
+__pycache__/
 captures/
 build/
 *.app/
