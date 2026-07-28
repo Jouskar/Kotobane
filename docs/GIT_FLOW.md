@@ -18,7 +18,7 @@ Kotobane uses a lightweight Git Flow model.
 
 ## First release
 
-The current baseline is **0.1.0-beta.2** and is tagged as `v0.1.0-beta.2` on
+The current baseline is **0.1.0-beta.3** and is tagged as `v0.1.0-beta.3` on
 `main`. Its release branch is short-lived and deleted after merging; ongoing
 work continues from `develop` through feature branches.
 
