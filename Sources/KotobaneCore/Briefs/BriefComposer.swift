@@ -1,5 +1,9 @@
 public enum BriefComposer {
     public static func compose(intent: CaptureIntent, transcript: String) -> String {
+        if intent == .transcriptOnly {
+            return transcript
+        }
+
         let template = IntentTemplate.template(for: intent)
         let checklist = template.checklist.enumerated()
             .map { "\($0.offset + 1). \($0.element)" }
@@ -93,6 +97,8 @@ private struct IntentTemplate {
                     "Recommended next actions"
                 ]
             )
+        case .transcriptOnly:
+            fatalError("Transcript-only intent does not use a template.")
         }
     }
 }

@@ -34,3 +34,11 @@ import Testing
         #expect(output.components(separatedBy: "ham metin").count == 2)
     }
 }
+
+@Test func transcriptOnlyReturnsTheEditedTranscriptExactly() {
+    let transcript = "  İlk fikir.\n\nİkinci fikir.  "
+
+    #expect(
+        BriefComposer.compose(intent: .transcriptOnly, transcript: transcript) == transcript
+    )
+}
