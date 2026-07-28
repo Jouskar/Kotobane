@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an improvement to Kotobane
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Local-first and privacy impact
+      description: "Explain any audio, transcript, model, or network impact."
+    validations:
+      required: true
