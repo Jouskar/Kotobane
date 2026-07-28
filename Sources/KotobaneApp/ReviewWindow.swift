@@ -195,6 +195,7 @@ extension CaptureIntent {
         case .projectIdea: "Project Idea"
         case .meetingNote: "Meeting Note"
         case .freeform: "Freeform"
+        case .transcriptOnly: "Transcript only"
         }
     }
 }
