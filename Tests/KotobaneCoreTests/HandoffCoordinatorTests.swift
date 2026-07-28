@@ -294,6 +294,7 @@ import Testing
         "sleep",
         "active:true",
         "paste-trust-check:no-prompt",
+        "new-chat",
         "paste",
     ])
 }
