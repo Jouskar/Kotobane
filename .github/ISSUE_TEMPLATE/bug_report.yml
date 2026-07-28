@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible Kotobane problem
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Please remove transcript or recording content before posting."
+  - type: input
+    id: version
+    attributes:
+      label: Kotobane version
+      placeholder: "0.1.0-beta.1"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Start capture …"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and diagnostics
+    validations:
+      required: true
+  - type: dropdown
+    id: privacy
+    attributes:
+      label: Did the report include private capture content?
+      options: ["No", "Yes, I removed it"]
+    validations:
+      required: true
