@@ -6,14 +6,14 @@ Kotobane captures an explicit spoken thought, transcribes it locally with
 Qwen3-ASR, and prepares an editable handoff for Codex, Claude, the clipboard,
 or a Markdown file. Turkish is the default language hint.
 
-![Status](https://img.shields.io/badge/status-0.1.0--beta.3-7c3aed)
+![Status](https://img.shields.io/badge/status-0.1.0--beta.4-7c3aed)
 ![Platform](https://img.shields.io/badge/macOS-14%2B-111827)
 ![Architecture](https://img.shields.io/badge/Apple%20silicon-arm64-f59e0b)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 
 ## Download
 
-[Download Kotobane 0.1.0-beta.3](https://github.com/Jouskar/Kotobane/releases/download/v0.1.0-beta.3/Kotobane-0.1.0-beta.3.zip)
+[Download Kotobane 0.1.0-beta.4](https://github.com/Jouskar/Kotobane/releases/download/v0.1.0-beta.4/Kotobane-0.1.0-beta.4.zip)
 
 1. Unzip the download.
 2. Move `Kotobane.app` to Applications.
@@ -88,10 +88,11 @@ Requirements:
 git clone https://github.com/Jouskar/Kotobane.git
 cd Kotobane
 git switch develop
-swift run Kotobane
+scripts/run-app.sh
 ```
 
-Package a local app bundle with:
+`scripts/run-app.sh` packages and launches the app bundle. To package without
+launching it:
 
 ```sh
 scripts/package-app.sh

@@ -18,7 +18,7 @@ struct KotobaneApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("Kotobane", id: "desk") {
+        WindowGroup("Kotobane", id: "desk") {
             CaptureDeskWindow(container: container)
         }
         .defaultSize(width: 760, height: 560)
@@ -56,5 +56,12 @@ private final class KotobaneAppDelegate: NSObject, NSApplicationDelegate {
 private final class SystemApplicationActivator: ApplicationActivating {
     func activate() {
         NSRunningApplication.current.activate(options: [])
+    }
+
+    func openCaptureDesk() {
+        let deskWindow = NSApplication.shared.windows.first { window in
+            window.title == "Kotobane"
+        }
+        deskWindow?.makeKeyAndOrderFront(nil)
     }
 }
