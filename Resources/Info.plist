@@ -6,6 +6,8 @@
 	<string>Kotobane</string>
 	<key>CFBundleExecutable</key>
 	<string>Kotobane</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon.icns</string>
 	<key>CFBundleIdentifier</key>
 	<string>dev.kotobane.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
