@@ -99,9 +99,16 @@ scripts/package-app.sh
 open dist/Kotobane.app
 ```
 
-The packaging script creates an ad-hoc-signed app and refuses to package on a
-non-arm64 host. Run `scripts/verify.sh` for the complete local verification
-gate.
+The packaging script creates an ad-hoc-signed app by default and refuses to
+package on a non-arm64 host. To use a locally installed Developer ID
+Application identity, pass it explicitly:
+
+```sh
+KOTOBANE_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+  scripts/package-app.sh
+```
+
+Run `scripts/verify.sh` for the complete local verification gate.
 
 ## Project status
 
