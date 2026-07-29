@@ -14,6 +14,7 @@ MACOS_DIRECTORY="$CONTENTS/MacOS"
 HELPERS_DIRECTORY="$CONTENTS/Helpers"
 RESOURCES_DIRECTORY="$CONTENTS/Resources"
 CACHE_ROOT="$REPOSITORY_ROOT/.swift-cache"
+SIGNING_IDENTITY="${KOTOBANE_SIGNING_IDENTITY:--}"
 
 export CLANG_MODULE_CACHE_PATH="$CACHE_ROOT/clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="$CACHE_ROOT/swiftpm"
@@ -43,12 +44,27 @@ install -m 644 \
     Resources/Kotobane.entitlements \
     "$RESOURCES_DIRECTORY/Kotobane.entitlements"
 
-codesign \
-    --force \
-    --deep \
-    --sign - \
-    --entitlements Resources/Kotobane.entitlements \
-    "$APP_BUNDLE"
+sign_application() {
+    if [ "$SIGNING_IDENTITY" = "-" ]; then
+        codesign \
+            --force \
+            --deep \
+            --sign - \
+            --entitlements Resources/Kotobane.entitlements \
+            "$APP_BUNDLE"
+    else
+        codesign \
+            --force \
+            --deep \
+            --sign "$SIGNING_IDENTITY" \
+            --options runtime \
+            --timestamp \
+            --entitlements Resources/Kotobane.entitlements \
+            "$APP_BUNDLE"
+    fi
+}
+
+sign_application
 codesign --verify --deep --strict "$APP_BUNDLE"
 
 echo "Packaged $APP_BUNDLE"
