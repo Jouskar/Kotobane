@@ -38,6 +38,7 @@ install -m 644 helper/requirements.lock "$HELPERS_DIRECTORY/requirements.lock"
 install -m 644 helper/runtime-manifest.json "$HELPERS_DIRECTORY/runtime-manifest.json"
 install -m 755 scripts/bootstrap-helper.sh "$HELPERS_DIRECTORY/bootstrap-helper.sh"
 install -m 644 Resources/Info.plist "$CONTENTS/Info.plist"
+install -m 644 Resources/AppIcon.icns "$RESOURCES_DIRECTORY/AppIcon.icns"
 install -m 644 \
     Resources/Kotobane.entitlements \
     "$RESOURCES_DIRECTORY/Kotobane.entitlements"
