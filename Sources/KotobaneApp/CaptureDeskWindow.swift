@@ -46,6 +46,14 @@ struct CaptureDeskWindow: View {
                 Text(captureSubtitle).foregroundStyle(.secondary)
                 if let snapshot = container.capture.state.recordingSnapshot {
                     RecordingWaveform(rmsLevel: snapshot.rmsLevel)
+                    Text(
+                        snapshot.partialTranscript.isEmpty
+                            ? "Listening for a live local draft…"
+                            : snapshot.partialTranscript
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
                 }
             }
             Spacer()

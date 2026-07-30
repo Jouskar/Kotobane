@@ -20,6 +20,16 @@ struct RecorderOverlay: View {
                         .font(.system(.body, design: .monospaced))
                 }
                 RecordingWaveform(rmsLevel: snapshot.rmsLevel)
+                if snapshot.partialTranscript.isEmpty {
+                    Text("Live draft will appear here")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(snapshot.partialTranscript)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
             .frame(width: 240)
 
@@ -116,5 +126,5 @@ final class RecorderOverlayPresenter {
 enum AppPresentation {
     static let menuWidth: CGFloat = 320
     static let recorderOverlayWidth: CGFloat = 620
-    static let recorderOverlayHeight: CGFloat = 150
+    static let recorderOverlayHeight: CGFloat = 190
 }

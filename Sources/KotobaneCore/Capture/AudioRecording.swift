@@ -20,10 +20,16 @@ public struct AudioRecording: Equatable, Sendable {
 public struct RecordingSnapshot: Equatable, Sendable {
     public let elapsedSeconds: TimeInterval
     public let rmsLevel: Float
+    public let partialTranscript: String
 
-    public init(elapsedSeconds: TimeInterval, rmsLevel: Float) {
+    public init(
+        elapsedSeconds: TimeInterval,
+        rmsLevel: Float,
+        partialTranscript: String = ""
+    ) {
         self.elapsedSeconds = elapsedSeconds
         self.rmsLevel = rmsLevel
+        self.partialTranscript = partialTranscript
     }
 }
 
@@ -76,7 +82,8 @@ public struct AudioRecordingStopFailure: Error, Equatable, Sendable {
 public protocol AudioRecordingManaging: AnyObject {
     func start(
         at url: URL,
-        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void
+        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void,
+        onPartialRecording: @escaping @Sendable (AudioRecording) -> Void
     ) throws
     func stop() throws -> AudioRecording
 }
