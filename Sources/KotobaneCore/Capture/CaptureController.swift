@@ -44,6 +44,7 @@ public final class CaptureController {
     private let languageHint: String
     private let model: ModelChoice
     private let defaultIntent: CaptureIntent
+    private let accurateFinalTranscript: Bool
     private let makeID: () -> UUID
     private let now: () -> Date
 
@@ -51,7 +52,7 @@ public final class CaptureController {
     private var captureID: UUID?
     private var temporaryURL: URL?
     private var retryContext: RetryContext?
-    private var partialTranscript = PartialTranscriptAccumulator()
+    private var partialTranscript = RollingTranscriptAccumulator()
     private var partialAudioURLs: Set<URL> = []
     private var partialTranscriptionTask: Task<Void, Never>?
 
@@ -65,6 +66,7 @@ public final class CaptureController {
         languageHint: String,
         model: ModelChoice,
         defaultIntent: CaptureIntent,
+        accurateFinalTranscript: Bool = true,
         makeID: @escaping () -> UUID = UUID.init,
         now: @escaping () -> Date = Date.init
     ) {
@@ -77,6 +79,7 @@ public final class CaptureController {
         self.languageHint = languageHint
         self.model = model
         self.defaultIntent = defaultIntent
+        self.accurateFinalTranscript = accurateFinalTranscript
         self.makeID = makeID
         self.now = now
     }
@@ -179,6 +182,23 @@ public final class CaptureController {
         }
 
         removePartialAudio()
+        if !accurateFinalTranscript, !partialTranscript.text.isEmpty {
+            let timestamp = now()
+            let capture = Capture(
+                id: captureID,
+                title: "",
+                createdAt: timestamp,
+                modifiedAt: timestamp,
+                transcript: partialTranscript.text,
+                intent: defaultIntent,
+                status: .completed,
+                durationSeconds: recording.durationSeconds,
+                audioFilename: nil
+            )
+            retryContext = .persist(recording, capture)
+            persist(recording: recording, capture: capture, operationID: operationID)
+            return
+        }
         retryContext = .transcribe(recording, captureID)
         await transcribe(recording, captureID: captureID, operationID: operationID)
     }
@@ -300,7 +320,7 @@ public final class CaptureController {
 
         self.captureID = captureID
         temporaryURL = url
-        partialTranscript = PartialTranscriptAccumulator()
+        partialTranscript = RollingTranscriptAccumulator()
         partialAudioURLs = []
         state = .recording(.init(elapsedSeconds: 0, rmsLevel: 0))
     }
@@ -337,7 +357,7 @@ public final class CaptureController {
                       self.captureID == captureID,
                       self.state.isRecording
                 else { return }
-                self.partialTranscript.append(result.text)
+                self.partialTranscript.replaceRollingWindow(with: result.text)
                 guard let snapshot = self.state.recordingSnapshot else { return }
                 self.state = .recording(
                     RecordingSnapshot(
