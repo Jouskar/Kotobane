@@ -19,7 +19,6 @@ public struct PartialTranscriptAccumulator: Equatable, Sendable {
 public struct RollingTranscriptAccumulator: Equatable, Sendable {
     private var transcriptWords: [String] = []
     private var previousWindowWords: [String] = []
-    private var latestWindowText = ""
 
     public init() {}
 
@@ -28,14 +27,13 @@ public struct RollingTranscriptAccumulator: Equatable, Sendable {
     }
 
     public var liveText: String {
-        latestWindowText
+        text
     }
 
     public mutating func replaceRollingWindow(with text: String) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextWindowWords = Self.words(in: trimmedText)
         guard !nextWindowWords.isEmpty else { return }
-        latestWindowText = trimmedText
         guard !previousWindowWords.isEmpty else {
             transcriptWords = nextWindowWords
             previousWindowWords = nextWindowWords
