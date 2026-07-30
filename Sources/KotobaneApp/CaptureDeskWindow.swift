@@ -48,11 +48,11 @@ struct CaptureDeskWindow: View {
                     RecordingWaveform(rmsLevel: snapshot.rmsLevel)
                     Text(
                         snapshot.partialTranscript.isEmpty
-                            ? "Listening for a live local draft…"
+                            ? (snapshot.liveDraftMessage ?? "Listening for a live local draft…")
                             : snapshot.partialTranscript
                     )
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(snapshot.liveDraftStatus == .unavailable ? .orange : .secondary)
                     .lineLimit(2)
                 }
             }
