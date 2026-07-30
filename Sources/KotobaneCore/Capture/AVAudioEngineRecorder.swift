@@ -149,8 +149,6 @@ private final class AudioTapSession: @unchecked Sendable {
     private var liveSegmentURL: URL?
     private var liveSegmentFrames: AVAudioFramePosition = 0
     private var liveSegmentIndex = 0
-    private var liveSegmentURLs: [URL] = []
-    private var rollingWindowIndex = 0
     private var failure: AudioRecorderError?
     private var finished = false
 
@@ -240,7 +238,6 @@ private final class AudioTapSession: @unchecked Sendable {
         try lock.withLock {
             finished = true
             completeLiveSegmentFile()
-            removeLiveSegmentFiles()
             let duration = converter.outputFormat.sampleRate > 0
                 ? Double(frames) / converter.outputFormat.sampleRate
                 : 0
@@ -305,78 +302,22 @@ private final class AudioTapSession: @unchecked Sendable {
             liveSegmentFrames = 0
             return
         }
+        let completedFrames = liveSegmentFrames
         liveSegmentFile = nil
         self.liveSegmentURL = nil
         liveSegmentFrames = 0
-        liveSegmentURLs.append(liveSegmentURL)
-        while liveSegmentURLs.count > Self.rollingWindowSegmentCount {
-            let expired = liveSegmentURLs.removeFirst()
-            try? FileManager.default.removeItem(at: expired)
-        }
-        guard liveSegmentURLs.count == Self.rollingWindowSegmentCount else { return }
-        emitRollingWindow()
-    }
-
-    private func emitRollingWindow() {
-        rollingWindowIndex += 1
-        let snapshotURL = url.deletingLastPathComponent().appending(
-            path: "\(url.deletingPathExtension().lastPathComponent)-live-window-\(rollingWindowIndex).wav"
+        onPartialRecording(
+            AudioRecording(
+                fileURL: liveSegmentURL,
+                frameCount: completedFrames,
+                durationSeconds: Double(completedFrames) / converter.outputFormat.sampleRate
+            )
         )
-        do {
-            let destination = try AVAudioFile(
-                forWriting: snapshotURL,
-                settings: PCMInt16WAV.settings(
-                    sampleRate: converter.outputFormat.sampleRate,
-                    channelCount: converter.outputFormat.channelCount
-                ),
-                commonFormat: .pcmFormatInt16,
-                interleaved: false
-            )
-            var frameCount: AVAudioFramePosition = 0
-            for segmentURL in liveSegmentURLs {
-                let source = try AVAudioFile(forReading: segmentURL)
-                while source.framePosition < source.length {
-                    let remaining = source.length - source.framePosition
-                    let capacity = AVAudioFrameCount(min(8_192, remaining))
-                    guard let buffer = AVAudioPCMBuffer(
-                        pcmFormat: source.processingFormat,
-                        frameCapacity: capacity
-                    ) else {
-                        throw AudioRecorderError.writeFailed("Could not allocate a live transcription buffer.")
-                    }
-                    try source.read(into: buffer, frameCount: capacity)
-                    guard buffer.frameLength > 0 else { break }
-                    try destination.write(from: buffer)
-                    frameCount += AVAudioFramePosition(buffer.frameLength)
-                }
-            }
-            guard frameCount > 0 else {
-                try FileManager.default.removeItem(at: snapshotURL)
-                return
-            }
-            onPartialRecording(
-                AudioRecording(
-                    fileURL: snapshotURL,
-                    frameCount: frameCount,
-                    durationSeconds: Double(frameCount) / converter.outputFormat.sampleRate
-                )
-            )
-        } catch {
-            try? FileManager.default.removeItem(at: snapshotURL)
-        }
-    }
-
-    private func removeLiveSegmentFiles() {
-        for segmentURL in liveSegmentURLs {
-            try? FileManager.default.removeItem(at: segmentURL)
-        }
-        liveSegmentURLs = []
     }
 
     private static let liveSegmentFrames = AVAudioFramePosition(
         PCMInt16WAV.transcriptionSampleRate
     )
-    private static let rollingWindowSegmentCount = 6
 
     private static func rmsLevel(of buffer: AVAudioPCMBuffer) -> Float {
         guard buffer.frameLength > 0 else { return 0 }
