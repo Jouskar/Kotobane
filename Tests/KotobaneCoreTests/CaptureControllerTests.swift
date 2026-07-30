@@ -319,6 +319,32 @@ import Testing
     #expect(fixture.controller.state.isRecording)
 }
 
+@MainActor
+@Test func failedPartialSegmentExplainsThatTheLiveDraftIsUnavailableWhileRecording() async throws {
+    let engine = ScriptedTranscriptionEngine([
+        .failure(TranscriptionFailure.helperRejected(
+            code: "model_unavailable",
+            message: "Install the model."
+        )),
+    ])
+    let fixture = CaptureFixture(engine: engine)
+    await fixture.controller.start()
+
+    fixture.recorder.publishPartial(
+        AudioRecording(
+            fileURL: fixture.temporaryURL,
+            frameCount: 96_000,
+            durationSeconds: 6
+        )
+    )
+    for _ in 0..<4 { await Task.yield() }
+
+    let snapshot = try #require(fixture.controller.state.recordingSnapshot)
+    #expect(snapshot.liveDraftStatus == .unavailable)
+    #expect(snapshot.liveDraftMessage == "Live draft unavailable: Install the model.")
+    #expect(fixture.controller.state.isRecording)
+}
+
 @Test func recorderWAVSettingsUseDependencyFreeLittleEndianIntegerPCM() {
     let settings = PCMInt16WAV.settings(sampleRate: 48_000, channelCount: 1)
 

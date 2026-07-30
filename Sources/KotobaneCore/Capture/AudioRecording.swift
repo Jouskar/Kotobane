@@ -21,16 +21,29 @@ public struct RecordingSnapshot: Equatable, Sendable {
     public let elapsedSeconds: TimeInterval
     public let rmsLevel: Float
     public let partialTranscript: String
+    public let liveDraftStatus: LiveDraftStatus
+    public let liveDraftMessage: String?
 
     public init(
         elapsedSeconds: TimeInterval,
         rmsLevel: Float,
-        partialTranscript: String = ""
+        partialTranscript: String = "",
+        liveDraftStatus: LiveDraftStatus = .waiting,
+        liveDraftMessage: String? = nil
     ) {
         self.elapsedSeconds = elapsedSeconds
         self.rmsLevel = rmsLevel
         self.partialTranscript = partialTranscript
+        self.liveDraftStatus = liveDraftStatus
+        self.liveDraftMessage = liveDraftMessage
     }
+}
+
+public enum LiveDraftStatus: Equatable, Sendable {
+    case waiting
+    case transcribing
+    case available
+    case unavailable
 }
 
 public struct RetainedAudio: Equatable, Sendable {

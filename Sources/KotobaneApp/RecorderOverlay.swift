@@ -21,9 +21,9 @@ struct RecorderOverlay: View {
                 }
                 RecordingWaveform(rmsLevel: snapshot.rmsLevel)
                 if snapshot.partialTranscript.isEmpty {
-                    Text("Live draft will appear here")
+                    Text(snapshot.liveDraftMessage ?? "Live draft will appear here")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(snapshot.liveDraftStatus == .unavailable ? .orange : .secondary)
                 } else {
                     Text(snapshot.partialTranscript)
                         .font(.caption)

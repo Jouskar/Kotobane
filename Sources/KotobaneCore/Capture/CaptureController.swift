@@ -56,6 +56,8 @@ public final class CaptureController {
     private var partialAudioURLs: Set<URL> = []
     private var partialTranscriptionTask: Task<Void, Never>?
     private var queuedPartialRecording: AudioRecording?
+    private var liveDraftStatus: LiveDraftStatus = .waiting
+    private var liveDraftMessage: String?
 
     public init(
         authorizer: any MicrophoneAuthorizing,
@@ -289,13 +291,7 @@ public final class CaptureController {
                           self.operationID == operationID,
                           self.state.isRecording
                     else { return }
-                    self.state = .recording(
-                        RecordingSnapshot(
-                            elapsedSeconds: snapshot.elapsedSeconds,
-                            rmsLevel: snapshot.rmsLevel,
-                            partialTranscript: self.partialTranscript.liveText
-                        )
-                    )
+                    self.state = .recording(self.recordingSnapshot(from: snapshot))
                 }
                 },
                 onPartialRecording: { [weak self] partialRecording in
@@ -326,7 +322,9 @@ public final class CaptureController {
         partialTranscript = RollingTranscriptAccumulator()
         partialAudioURLs = []
         queuedPartialRecording = nil
-        state = .recording(.init(elapsedSeconds: 0, rmsLevel: 0))
+        liveDraftStatus = .waiting
+        liveDraftMessage = "Live draft starts after about six seconds of speech."
+        state = .recording(recordingSnapshot(elapsedSeconds: 0, rmsLevel: 0))
     }
 
     private func transcribePartialRecording(
@@ -377,6 +375,9 @@ public final class CaptureController {
                     self.queuedPartialRecording = nil
                 }
             }
+            self.liveDraftStatus = .transcribing
+            self.liveDraftMessage = "Creating live draft locally…"
+            self.refreshRecordingSnapshot()
             do {
                 let result = try await self.transcriptionEngine.transcribe(
                     TranscriptionRequest(
@@ -391,18 +392,52 @@ public final class CaptureController {
                       self.state.isRecording
                 else { return }
                 self.partialTranscript.replaceRollingWindow(with: result.text)
-                guard let snapshot = self.state.recordingSnapshot else { return }
-                self.state = .recording(
-                    RecordingSnapshot(
-                        elapsedSeconds: snapshot.elapsedSeconds,
-                        rmsLevel: snapshot.rmsLevel,
-                        partialTranscript: self.partialTranscript.liveText
-                    )
-                )
+                self.liveDraftStatus = .available
+                self.liveDraftMessage = nil
+                self.refreshRecordingSnapshot()
             } catch {
-                // A live draft is best-effort; the final transcription remains authoritative.
+                guard !Task.isCancelled,
+                      self.operationID == operationID,
+                      self.captureID == captureID,
+                      self.state.isRecording
+                else { return }
+                self.liveDraftStatus = .unavailable
+                self.liveDraftMessage = "Live draft unavailable: \(liveDraftFailureMessage(error))"
+                self.refreshRecordingSnapshot()
             }
         }
+    }
+
+    private func recordingSnapshot(from snapshot: RecordingSnapshot) -> RecordingSnapshot {
+        recordingSnapshot(
+            elapsedSeconds: snapshot.elapsedSeconds,
+            rmsLevel: snapshot.rmsLevel
+        )
+    }
+
+    private func recordingSnapshot(
+        elapsedSeconds: TimeInterval,
+        rmsLevel: Float
+    ) -> RecordingSnapshot {
+        RecordingSnapshot(
+            elapsedSeconds: elapsedSeconds,
+            rmsLevel: rmsLevel,
+            partialTranscript: partialTranscript.liveText,
+            liveDraftStatus: liveDraftStatus,
+            liveDraftMessage: liveDraftMessage
+        )
+    }
+
+    private func refreshRecordingSnapshot() {
+        guard let snapshot = state.recordingSnapshot else { return }
+        state = .recording(recordingSnapshot(from: snapshot))
+    }
+
+    private func liveDraftFailureMessage(_ error: Error) -> String {
+        if case let TranscriptionFailure.helperRejected(_, message) = error {
+            return message
+        }
+        return "The local helper could not create this draft. The full transcript will still run after you stop."
     }
 
     private func removePartialAudio() {
