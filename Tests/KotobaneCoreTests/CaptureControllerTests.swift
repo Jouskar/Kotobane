@@ -399,13 +399,13 @@ import Testing
     #expect(accumulator.text == "bir iki üç dört beş altı yedi")
 }
 
-@Test func rollingTranscriptAccumulatorExposesOnlyTheNewestWindowForLiveDisplay() {
+@Test func rollingTranscriptAccumulatorExposesCumulativeTextForLiveDisplay() {
     var accumulator = RollingTranscriptAccumulator()
 
     accumulator.replaceRollingWindow(with: "bir iki üç dört beş altı")
     accumulator.replaceRollingWindow(with: "iki üç dört beş altı yedi")
 
-    #expect(accumulator.liveText == "iki üç dört beş altı yedi")
+    #expect(accumulator.liveText == "bir iki üç dört beş altı yedi")
 }
 
 @Test func recorderSettingsProduceAnIntegerPCMWAVReadableByTheFastPath() throws {
