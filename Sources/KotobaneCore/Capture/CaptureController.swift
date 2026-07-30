@@ -55,6 +55,7 @@ public final class CaptureController {
     private var partialTranscript = RollingTranscriptAccumulator()
     private var partialAudioURLs: Set<URL> = []
     private var partialTranscriptionTask: Task<Void, Never>?
+    private var queuedPartialRecording: AudioRecording?
 
     public init(
         authorizer: any MicrophoneAuthorizing,
@@ -127,6 +128,7 @@ public final class CaptureController {
         state = .transcribing
         partialTranscriptionTask?.cancel()
         partialTranscriptionTask = nil
+        queuedPartialRecording = nil
         let recording: AudioRecording
         do {
             recording = try recorder.stop()
@@ -209,6 +211,7 @@ public final class CaptureController {
         retryContext = nil
         partialTranscriptionTask?.cancel()
         partialTranscriptionTask = nil
+        queuedPartialRecording = nil
 
         if case .recording = priorState {
             _ = try? recorder.stop()
@@ -290,7 +293,7 @@ public final class CaptureController {
                         RecordingSnapshot(
                             elapsedSeconds: snapshot.elapsedSeconds,
                             rmsLevel: snapshot.rmsLevel,
-                            partialTranscript: self.partialTranscript.text
+                            partialTranscript: self.partialTranscript.liveText
                         )
                     )
                 }
@@ -322,6 +325,7 @@ public final class CaptureController {
         temporaryURL = url
         partialTranscript = RollingTranscriptAccumulator()
         partialAudioURLs = []
+        queuedPartialRecording = nil
         state = .recording(.init(elapsedSeconds: 0, rmsLevel: 0))
     }
 
@@ -331,18 +335,47 @@ public final class CaptureController {
         operationID: UUID
     ) {
         partialAudioURLs.insert(recording.fileURL)
-        guard self.operationID == operationID, state.isRecording,
-              partialTranscriptionTask == nil
-        else {
+        guard self.operationID == operationID, state.isRecording else {
             removePartialAudio(at: recording.fileURL)
             return
         }
+        if partialTranscriptionTask != nil {
+            if let queuedPartialRecording {
+                removePartialAudio(at: queuedPartialRecording.fileURL)
+            }
+            queuedPartialRecording = recording
+            return
+        }
+        startPartialTranscription(
+            recording,
+            captureID: captureID,
+            operationID: operationID
+        )
+    }
 
+    private func startPartialTranscription(
+        _ recording: AudioRecording,
+        captureID: UUID,
+        operationID: UUID
+    ) {
         partialTranscriptionTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 self.partialTranscriptionTask = nil
                 self.removePartialAudio(at: recording.fileURL)
+                if let queued = self.queuedPartialRecording,
+                   self.operationID == operationID,
+                   self.captureID == captureID,
+                   self.state.isRecording {
+                    self.queuedPartialRecording = nil
+                    self.startPartialTranscription(
+                        queued,
+                        captureID: captureID,
+                        operationID: operationID
+                    )
+                } else {
+                    self.queuedPartialRecording = nil
+                }
             }
             do {
                 let result = try await self.transcriptionEngine.transcribe(
@@ -363,7 +396,7 @@ public final class CaptureController {
                     RecordingSnapshot(
                         elapsedSeconds: snapshot.elapsedSeconds,
                         rmsLevel: snapshot.rmsLevel,
-                        partialTranscript: self.partialTranscript.text
+                        partialTranscript: self.partialTranscript.liveText
                     )
                 )
             } catch {

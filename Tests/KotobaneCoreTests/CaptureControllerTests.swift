@@ -350,6 +350,15 @@ import Testing
     #expect(accumulator.text == "bir iki üç dört beş altı yedi")
 }
 
+@Test func rollingTranscriptAccumulatorExposesOnlyTheNewestWindowForLiveDisplay() {
+    var accumulator = RollingTranscriptAccumulator()
+
+    accumulator.replaceRollingWindow(with: "bir iki üç dört beş altı")
+    accumulator.replaceRollingWindow(with: "iki üç dört beş altı yedi")
+
+    #expect(accumulator.liveText == "iki üç dört beş altı yedi")
+}
+
 @Test func recorderSettingsProduceAnIntegerPCMWAVReadableByTheFastPath() throws {
     let directory = FileManager.default.temporaryDirectory
         .appending(path: UUID().uuidString, directoryHint: .isDirectory)
