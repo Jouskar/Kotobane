@@ -10,6 +10,7 @@ import Testing
     #expect(settings.audioRetention == .deleteAfterTranscription)
     #expect(settings.shortcut == .init(keyCode: 49, modifiers: [.control, .option]))
     #expect(!settings.pasteAfterOpening)
+    #expect(settings.accurateFinalTranscript)
 }
 
 @Test func missingSettingsReturnDefaults() throws {
@@ -42,14 +43,17 @@ import Testing
     #expect(migrated.version == AppSettings.currentVersion)
 }
 
-@Test func versionTwoSettingsRequirePastePreference() throws {
+@Test func versionTwoSettingsMigrateFinalTranscriptPreferenceToAccurate() throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
     let settingsURL = root.appending(path: "settings.json")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     try Data(#"{"version":2,"languageHint":"Turkish","model":"small","audioRetention":"deleteAfterTranscription","shortcut":{"keyCode":49,"modifiers":3}}"#.utf8).write(to: settingsURL)
 
-    #expect(throws: (any Error).self) { try SettingsStore(url: settingsURL).load() }
+    let migrated = try SettingsStore(url: settingsURL).load()
+
+    #expect(migrated.accurateFinalTranscript)
+    #expect(migrated.version == AppSettings.currentVersion)
 }
 
 @Test(arguments: [0, 3]) func unsupportedSettingsVersionsAreRejected(_ version: Int) throws {
@@ -122,7 +126,7 @@ import Testing
 
     let json = try String(contentsOf: settingsURL, encoding: .utf8)
     expectKeys(
-        ["audioRetention", "languageHint", "model", "pasteAfterOpening", "shortcut", "version"],
+        ["accurateFinalTranscript", "audioRetention", "languageHint", "model", "pasteAfterOpening", "shortcut", "version"],
         appearInOrderIn: json
     )
 }

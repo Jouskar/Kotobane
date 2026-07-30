@@ -48,7 +48,7 @@ final class AppContainer {
     @ObservationIgnored private let authorizer: AVCaptureMicrophoneAuthorizer
     @ObservationIgnored private let recorder: AVAudioEngineRecorder
     @ObservationIgnored private let audioFiles: CaptureAudioFiles
-    @ObservationIgnored private let transcriptionEngine: MLXHelperEngine
+    @ObservationIgnored private let transcriptionEngine: PersistentMLXHelperEngine
     @ObservationIgnored private let handoff: HandoffCoordinator
     @ObservationIgnored private let pasteAutomator: SystemPasteAutomator
     @ObservationIgnored private let shortcut: CarbonGlobalShortcut
@@ -63,7 +63,7 @@ final class AppContainer {
         authorizer: AVCaptureMicrophoneAuthorizer,
         recorder: AVAudioEngineRecorder,
         audioFiles: CaptureAudioFiles,
-        transcriptionEngine: MLXHelperEngine,
+        transcriptionEngine: PersistentMLXHelperEngine,
         capture: CaptureController,
         modelManager: ModelManager,
         settings: AppSettings,
@@ -112,10 +112,9 @@ final class AppContainer {
             let authorizer = AVCaptureMicrophoneAuthorizer()
             let recorder = AVAudioEngineRecorder()
             let audioFiles = CaptureAudioFiles(root: directories.root, fileManager: fileManager)
-            let transcriptionEngine = MLXHelperEngine(
+            let transcriptionEngine = PersistentMLXHelperEngine(
                 helperExecutableURL: bundledHelperURL(fileManager: fileManager),
                 allowedAudioRoot: directories.root,
-                timeout: .seconds(600),
                 runtimeBinDirectory: directories.root
                     .appending(path: "runtime/venv/bin", directoryHint: .isDirectory)
             )
@@ -459,7 +458,7 @@ final class AppContainer {
         settings: AppSettings,
         authorizer: AVCaptureMicrophoneAuthorizer,
         recorder: AVAudioEngineRecorder,
-        transcriptionEngine: MLXHelperEngine,
+        transcriptionEngine: PersistentMLXHelperEngine,
         captureStore: CaptureStore,
         audioFiles: CaptureAudioFiles
     ) -> CaptureController {
@@ -472,7 +471,8 @@ final class AppContainer {
             retention: settings.audioRetention,
             languageHint: settings.languageHint,
             model: settings.model,
-            defaultIntent: .brainstorm
+            defaultIntent: .brainstorm,
+            accurateFinalTranscript: settings.accurateFinalTranscript
         )
     }
 

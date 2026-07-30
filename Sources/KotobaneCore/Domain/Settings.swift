@@ -7,8 +7,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var audioRetention: AudioRetentionPolicy
     public var shortcut: Shortcut
     public var pasteAfterOpening: Bool
+    public var accurateFinalTranscript: Bool
 
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     public static let defaults = AppSettings(
         version: currentVersion,
@@ -16,7 +17,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         model: .small,
         audioRetention: .deleteAfterTranscription,
         shortcut: Shortcut(keyCode: 49, modifiers: [.control, .option]),
-        pasteAfterOpening: false
+        pasteAfterOpening: false,
+        accurateFinalTranscript: true
     )
 
     public init(
@@ -25,7 +27,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         model: ModelChoice,
         audioRetention: AudioRetentionPolicy,
         shortcut: Shortcut,
-        pasteAfterOpening: Bool
+        pasteAfterOpening: Bool,
+        accurateFinalTranscript: Bool
     ) {
         self.version = version
         self.languageHint = languageHint
@@ -33,6 +36,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.audioRetention = audioRetention
         self.shortcut = shortcut
         self.pasteAfterOpening = pasteAfterOpening
+        self.accurateFinalTranscript = accurateFinalTranscript
     }
 }
 

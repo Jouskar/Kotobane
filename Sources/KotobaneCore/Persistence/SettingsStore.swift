@@ -50,15 +50,16 @@ private struct StoredSettings: Decodable {
     let audioRetention: AudioRetentionPolicy
     let shortcut: Shortcut
     let pasteAfterOpening: Bool
+    let accurateFinalTranscript: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case version, languageHint, model, audioRetention, shortcut, pasteAfterOpening
+        case version, languageHint, model, audioRetention, shortcut, pasteAfterOpening, accurateFinalTranscript
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decode(Int.self, forKey: .version)
-        guard version == 1 || version == AppSettings.currentVersion else {
+        guard (1...AppSettings.currentVersion).contains(version) else {
             throw SettingsStoreError.unsupportedVersion(version)
         }
         languageHint = try container.decode(String.self, forKey: .languageHint)
@@ -78,6 +79,11 @@ private struct StoredSettings: Decodable {
         } else {
             pasteAfterOpening = try container.decode(Bool.self, forKey: .pasteAfterOpening)
         }
+        if version < 3 {
+            accurateFinalTranscript = true
+        } else {
+            accurateFinalTranscript = try container.decode(Bool.self, forKey: .accurateFinalTranscript)
+        }
     }
 
     var appSettings: AppSettings {
@@ -87,7 +93,8 @@ private struct StoredSettings: Decodable {
             model: model,
             audioRetention: audioRetention,
             shortcut: shortcut,
-            pasteAfterOpening: pasteAfterOpening
+            pasteAfterOpening: pasteAfterOpening,
+            accurateFinalTranscript: accurateFinalTranscript
         )
     }
 

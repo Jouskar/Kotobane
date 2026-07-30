@@ -51,6 +51,16 @@ struct SettingsWindow: View {
                     Text("Keep recordings with local history")
                         .tag(AudioRetentionPolicy.retain)
                 }
+
+                Toggle(
+                    "Accurate final transcript after stopping",
+                    isOn: $container.settings.accurateFinalTranscript
+                )
+                Text(
+                    "On: run a final full-recording local pass. Off: finish with the rolling live draft for faster handoff."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section("Global shortcut") {
