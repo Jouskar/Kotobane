@@ -383,7 +383,7 @@ public final class CaptureController {
                     TranscriptionRequest(
                         audioURL: recording.fileURL,
                         language: self.languageHint,
-                        model: self.model
+                        model: .small
                     )
                 )
                 guard !Task.isCancelled,

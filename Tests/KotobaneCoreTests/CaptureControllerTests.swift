@@ -320,6 +320,29 @@ import Testing
 }
 
 @MainActor
+@Test func accuracyModeUsesSmallModelForLiveDraftAndAccuracyModelForFinalTranscript() async throws {
+    let engine = ScriptedTranscriptionEngine([
+        .success(.fixture(text: "Canlı taslak")),
+        .success(.fixture(text: "Doğru son metin")),
+    ])
+    let fixture = CaptureFixture(engine: engine, model: .accuracy)
+    await fixture.controller.start()
+
+    fixture.recorder.publishPartial(
+        AudioRecording(
+            fileURL: fixture.temporaryURL,
+            frameCount: 96_000,
+            durationSeconds: 6
+        )
+    )
+    for _ in 0..<4 { await Task.yield() }
+    await fixture.controller.stop()
+
+    #expect(engine.requestModels == [.small, .accuracy])
+    #expect(fixture.controller.state.capture?.transcript == "Doğru son metin")
+}
+
+@MainActor
 @Test func failedPartialSegmentExplainsThatTheLiveDraftIsUnavailableWhileRecording() async throws {
     let engine = ScriptedTranscriptionEngine([
         .failure(TranscriptionFailure.helperRejected(
@@ -520,6 +543,7 @@ private final class CaptureFixture {
         frameCount: AVAudioFramePosition = 4_800,
         stopFailureAfterFrames: Bool = false,
         engine suppliedEngine: (any FixtureTranscriptionEngine)? = nil,
+        model: ModelChoice = .small,
         storeFailures: Int = 0,
         storeFailureCalls: Set<Int> = [],
         deleteFailures: Int = 0
@@ -580,7 +604,7 @@ private final class CaptureFixture {
             audioFiles: files,
             retention: retention,
             languageHint: "Turkish",
-            model: .small,
+            model: model,
             defaultIntent: .brainstorm,
             makeID: { fixtureID },
             now: { Date(timeIntervalSince1970: 1_234) }
@@ -687,6 +711,7 @@ private final class ScriptedTranscriptionEngine: FixtureTranscriptionEngine, @un
     private let lock = NSLock()
     private var outcomes: [Result<TranscriptionResult, Error>]
     private var calls = 0
+    private var models: [ModelChoice] = []
 
     init(_ outcomes: [Result<TranscriptionResult, Error>]) {
         self.outcomes = outcomes
@@ -696,9 +721,14 @@ private final class ScriptedTranscriptionEngine: FixtureTranscriptionEngine, @un
         lock.withLock { calls }
     }
 
+    @MainActor var requestModels: [ModelChoice] {
+        lock.withLock { models }
+    }
+
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
         let outcome = lock.withLock {
             calls += 1
+            models.append(request.model)
             return outcomes.removeFirst()
         }
         await MainActor.run {
