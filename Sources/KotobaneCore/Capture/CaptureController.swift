@@ -51,6 +51,9 @@ public final class CaptureController {
     private var captureID: UUID?
     private var temporaryURL: URL?
     private var retryContext: RetryContext?
+    private var partialTranscript = PartialTranscriptAccumulator()
+    private var partialAudioURLs: Set<URL> = []
+    private var partialTranscriptionTask: Task<Void, Never>?
 
     public init(
         authorizer: any MicrophoneAuthorizing,
@@ -119,6 +122,8 @@ public final class CaptureController {
         else { return }
 
         state = .transcribing
+        partialTranscriptionTask?.cancel()
+        partialTranscriptionTask = nil
         let recording: AudioRecording
         do {
             recording = try recorder.stop()
@@ -173,6 +178,7 @@ public final class CaptureController {
             return
         }
 
+        removePartialAudio()
         retryContext = .transcribe(recording, captureID)
         await transcribe(recording, captureID: captureID, operationID: operationID)
     }
@@ -181,6 +187,8 @@ public final class CaptureController {
         let priorState = state
         operationID = nil
         retryContext = nil
+        partialTranscriptionTask?.cancel()
+        partialTranscriptionTask = nil
 
         if case .recording = priorState {
             _ = try? recorder.stop()
@@ -188,6 +196,7 @@ public final class CaptureController {
         if let temporaryURL {
             try? audioFiles.removeTemporaryAudio(at: temporaryURL)
         }
+        removePartialAudio()
         self.temporaryURL = nil
         captureID = nil
         state = .idle
@@ -249,15 +258,33 @@ public final class CaptureController {
         }
 
         do {
-            try recorder.start(at: url) { [weak self] snapshot in
+            try recorder.start(
+                at: url,
+                onUpdate: { [weak self] snapshot in
                 Task { @MainActor [weak self] in
                     guard let self,
                           self.operationID == operationID,
                           self.state.isRecording
                     else { return }
-                    self.state = .recording(snapshot)
+                    self.state = .recording(
+                        RecordingSnapshot(
+                            elapsedSeconds: snapshot.elapsedSeconds,
+                            rmsLevel: snapshot.rmsLevel,
+                            partialTranscript: self.partialTranscript.text
+                        )
+                    )
                 }
-            }
+                },
+                onPartialRecording: { [weak self] partialRecording in
+                    Task { @MainActor [weak self] in
+                        self?.transcribePartialRecording(
+                            partialRecording,
+                            captureID: captureID,
+                            operationID: operationID
+                        )
+                    }
+                }
+            )
         } catch {
             try? audioFiles.removeTemporaryAudio(at: url)
             self.operationID = nil
@@ -273,7 +300,69 @@ public final class CaptureController {
 
         self.captureID = captureID
         temporaryURL = url
+        partialTranscript = PartialTranscriptAccumulator()
+        partialAudioURLs = []
         state = .recording(.init(elapsedSeconds: 0, rmsLevel: 0))
+    }
+
+    private func transcribePartialRecording(
+        _ recording: AudioRecording,
+        captureID: UUID,
+        operationID: UUID
+    ) {
+        partialAudioURLs.insert(recording.fileURL)
+        guard self.operationID == operationID, state.isRecording,
+              partialTranscriptionTask == nil
+        else {
+            removePartialAudio(at: recording.fileURL)
+            return
+        }
+
+        partialTranscriptionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.partialTranscriptionTask = nil
+                self.removePartialAudio(at: recording.fileURL)
+            }
+            do {
+                let result = try await self.transcriptionEngine.transcribe(
+                    TranscriptionRequest(
+                        audioURL: recording.fileURL,
+                        language: self.languageHint,
+                        model: self.model
+                    )
+                )
+                guard !Task.isCancelled,
+                      self.operationID == operationID,
+                      self.captureID == captureID,
+                      self.state.isRecording
+                else { return }
+                self.partialTranscript.append(result.text)
+                guard let snapshot = self.state.recordingSnapshot else { return }
+                self.state = .recording(
+                    RecordingSnapshot(
+                        elapsedSeconds: snapshot.elapsedSeconds,
+                        rmsLevel: snapshot.rmsLevel,
+                        partialTranscript: self.partialTranscript.text
+                    )
+                )
+            } catch {
+                // A live draft is best-effort; the final transcription remains authoritative.
+            }
+        }
+    }
+
+    private func removePartialAudio() {
+        let urls = partialAudioURLs
+        partialAudioURLs.removeAll()
+        for url in urls {
+            try? audioFiles.removeTemporaryAudio(at: url)
+        }
+    }
+
+    private func removePartialAudio(at url: URL) {
+        partialAudioURLs.remove(url)
+        try? audioFiles.removeTemporaryAudio(at: url)
     }
 
     private func transcribe(

@@ -36,7 +36,7 @@ Capture → Local transcription → Review and edit → Deterministic handoff
 ```
 
 1. Start capture with the configurable global shortcut.
-2. Speak while the compact overlay shows duration and microphone level.
+2. Speak while the compact overlay shows duration, microphone level, and a provisional local draft as completed speech segments are recognized.
 3. Stop capture and wait for local Qwen3-ASR transcription.
 4. Edit the transcript and select an intent.
 5. Copy or export the result, or open Codex/Claude for handoff.

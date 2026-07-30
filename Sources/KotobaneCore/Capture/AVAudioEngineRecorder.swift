@@ -57,7 +57,8 @@ public final class AVAudioEngineRecorder: AudioRecordingManaging {
 
     public func start(
         at url: URL,
-        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void
+        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void,
+        onPartialRecording: @escaping @Sendable (AudioRecording) -> Void
     ) throws {
         guard session == nil else { throw AudioRecorderError.alreadyRecording }
         guard AVCaptureDevice.default(for: .audio) != nil else {
@@ -75,7 +76,8 @@ public final class AVAudioEngineRecorder: AudioRecordingManaging {
             session = try AudioTapSession(
                 url: url,
                 inputFormat: inputFormat,
-                onUpdate: onUpdate
+                onUpdate: onUpdate,
+                onPartialRecording: onPartialRecording
             )
         } catch {
             throw AudioRecorderError.unableToStart(error.localizedDescription)
@@ -140,15 +142,21 @@ private final class AudioTapSession: @unchecked Sendable {
     private let file: AVAudioFile
     private let converter: AVAudioConverter
     private let onUpdate: @Sendable (RecordingSnapshot) -> Void
+    private let onPartialRecording: @Sendable (AudioRecording) -> Void
     private let startedAt = ProcessInfo.processInfo.systemUptime
     private var frames: AVAudioFramePosition = 0
+    private var partialFile: AVAudioFile?
+    private var partialURL: URL?
+    private var partialFrames: AVAudioFramePosition = 0
+    private var partialIndex = 0
     private var failure: AudioRecorderError?
     private var finished = false
 
     init(
         url: URL,
         inputFormat: AVAudioFormat,
-        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void
+        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void,
+        onPartialRecording: @escaping @Sendable (AudioRecording) -> Void
     ) throws {
         guard let outputFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
@@ -170,6 +178,8 @@ private final class AudioTapSession: @unchecked Sendable {
         )
         self.converter = converter
         self.onUpdate = onUpdate
+        self.onPartialRecording = onPartialRecording
+        startPartialFile()
     }
 
     func consume(_ buffer: AVAudioPCMBuffer) {
@@ -205,6 +215,7 @@ private final class AudioTapSession: @unchecked Sendable {
                 if output.frameLength > 0 {
                     try file.write(from: output)
                     frames += AVAudioFramePosition(output.frameLength)
+                    writePartial(output)
                 }
                 onUpdate(
                     RecordingSnapshot(
@@ -226,6 +237,7 @@ private final class AudioTapSession: @unchecked Sendable {
     func finish() throws -> AudioRecording {
         try lock.withLock {
             finished = true
+            completePartialFile()
             let duration = converter.outputFormat.sampleRate > 0
                 ? Double(frames) / converter.outputFormat.sampleRate
                 : 0
@@ -243,6 +255,70 @@ private final class AudioTapSession: @unchecked Sendable {
             return recording
         }
     }
+
+    private func writePartial(_ buffer: AVAudioPCMBuffer) {
+        guard let partialFile else { return }
+        do {
+            try partialFile.write(from: buffer)
+            partialFrames += AVAudioFramePosition(buffer.frameLength)
+            if partialFrames >= Self.partialSegmentFrames {
+                completePartialFile()
+                startPartialFile()
+            }
+        } catch {
+            self.partialFile = nil
+            partialURL = nil
+            partialFrames = 0
+        }
+    }
+
+    private func startPartialFile() {
+        partialIndex += 1
+        let filename = "\(url.deletingPathExtension().lastPathComponent)-partial-\(partialIndex).wav"
+        let candidate = url.deletingLastPathComponent().appending(path: filename)
+        do {
+            partialFile = try AVAudioFile(
+                forWriting: candidate,
+                settings: PCMInt16WAV.settings(
+                    sampleRate: converter.outputFormat.sampleRate,
+                    channelCount: converter.outputFormat.channelCount
+                ),
+                commonFormat: .pcmFormatInt16,
+                interleaved: false
+            )
+            partialURL = candidate
+            partialFrames = 0
+        } catch {
+            partialFile = nil
+            partialURL = nil
+            partialFrames = 0
+        }
+    }
+
+    private func completePartialFile() {
+        guard let partialURL, partialFrames > 0 else {
+            partialFile = nil
+            self.partialURL = nil
+            partialFrames = 0
+            return
+        }
+        let completedFrames = partialFrames
+        let duration = Double(completedFrames) / converter.outputFormat.sampleRate
+        partialFile = nil
+        self.partialURL = nil
+        partialFrames = 0
+        onPartialRecording(
+            AudioRecording(
+                fileURL: partialURL,
+                frameCount: completedFrames,
+                durationSeconds: duration
+            )
+        )
+    }
+
+    private static let partialSegmentFrames = AVAudioFramePosition(
+        PCMInt16WAV.transcriptionSampleRate * 6
+    )
 
     private static func rmsLevel(of buffer: AVAudioPCMBuffer) -> Float {
         guard buffer.frameLength > 0 else { return 0 }

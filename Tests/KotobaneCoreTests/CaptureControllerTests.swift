@@ -299,6 +299,26 @@ import Testing
     #expect(snapshot.rmsLevel == 0.75)
 }
 
+@MainActor
+@Test func completedPartialSegmentPublishesProvisionalTranscriptWhileRecording() async throws {
+    let engine = ScriptedTranscriptionEngine([.success(.fixture(text: "Canlı taslak"))])
+    let fixture = CaptureFixture(engine: engine)
+    await fixture.controller.start()
+
+    fixture.recorder.publishPartial(
+        AudioRecording(
+            fileURL: fixture.temporaryURL,
+            frameCount: 96_000,
+            durationSeconds: 6
+        )
+    )
+    for _ in 0..<4 { await Task.yield() }
+
+    let snapshot = try #require(fixture.controller.state.recordingSnapshot)
+    #expect(snapshot.partialTranscript == "Canlı taslak")
+    #expect(fixture.controller.state.isRecording)
+}
+
 @Test func recorderWAVSettingsUseDependencyFreeLittleEndianIntegerPCM() {
     let settings = PCMInt16WAV.settings(sampleRate: 48_000, channelCount: 1)
 
@@ -310,6 +330,15 @@ import Testing
 
 @Test func recorderUsesQwenCompatibleSixteenKilohertzOutput() {
     #expect(PCMInt16WAV.transcriptionSampleRate == 16_000)
+}
+
+@Test func partialTranscriptAccumulatorPreservesCompletedSegmentsInOrder() {
+    var accumulator = PartialTranscriptAccumulator()
+
+    accumulator.append("Merhaba")
+    accumulator.append("Kotobane")
+
+    #expect(accumulator.text == "Merhaba Kotobane")
 }
 
 @Test func recorderSettingsProduceAnIntegerPCMWAVReadableByTheFastPath() throws {
@@ -562,6 +591,7 @@ private final class SpyAudioRecorder: AudioRecordingManaging {
     var startError: AudioRecorderError?
     let stopFailure: AudioRecordingStopFailure?
     private var update: (@Sendable (RecordingSnapshot) -> Void)?
+    private var partialRecording: (@Sendable (AudioRecording) -> Void)?
     private(set) var startCount = 0
     private(set) var stopCount = 0
 
@@ -579,12 +609,14 @@ private final class SpyAudioRecorder: AudioRecordingManaging {
 
     func start(
         at url: URL,
-        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void
+        onUpdate: @escaping @Sendable (RecordingSnapshot) -> Void,
+        onPartialRecording: @escaping @Sendable (AudioRecording) -> Void
     ) throws {
         startCount += 1
         events.append("record-start")
         if let startError { throw startError }
         update = onUpdate
+        partialRecording = onPartialRecording
     }
 
     func stop() throws -> AudioRecording {
@@ -596,6 +628,10 @@ private final class SpyAudioRecorder: AudioRecordingManaging {
 
     func publish(_ snapshot: RecordingSnapshot) {
         update?(snapshot)
+    }
+
+    func publishPartial(_ recording: AudioRecording) {
+        partialRecording?(recording)
     }
 }
 
