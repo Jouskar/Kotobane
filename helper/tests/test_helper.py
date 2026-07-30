@@ -9,6 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import wave
 
 
 HELPER_ROOT = Path(__file__).resolve().parents[1]
@@ -140,6 +141,28 @@ class HelperTests(unittest.TestCase):
             backend.calls,
             [(str(model.resolve()), str(audio.resolve()), "Turkish")],
         )
+
+    def test_resamples_pcm_wav_for_backend_without_ffmpeg(self):
+        audio = self.root / "captures" / "forty-eight-kilohertz.wav"
+        audio.parent.mkdir(parents=True)
+        with wave.open(str(audio), "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(48_000)
+            writer.writeframes(b"\x00\x00" * 48_000)
+        prepare_model(self.root)
+        class InspectingBackend(FakeBackend):
+            def transcribe(self, model_path, audio_path, language):
+                with wave.open(audio_path, "rb") as reader:
+                    self.sample_rate = reader.getframerate()
+                return super().transcribe(model_path, audio_path, language)
+
+        backend = InspectingBackend()
+
+        response = transcribe(request_for(audio), self.root, backend)
+
+        self.assertEqual(response["status"], "completed")
+        self.assertEqual(backend.sample_rate, 16_000)
 
     def test_missing_model_is_reported_before_backend_use(self):
         audio = self.root / "captures" / "note.wav"
