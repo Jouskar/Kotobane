@@ -312,7 +312,7 @@ import Testing
             durationSeconds: 6
         )
     )
-    for _ in 0..<4 { await Task.yield() }
+    await waitForLiveDraftStatus(.available, in: fixture.controller)
 
     let snapshot = try #require(fixture.controller.state.recordingSnapshot)
     #expect(snapshot.partialTranscript == "Canlı taslak")
@@ -335,7 +335,7 @@ import Testing
             durationSeconds: 6
         )
     )
-    for _ in 0..<4 { await Task.yield() }
+    await waitForLiveDraftStatus(.available, in: fixture.controller)
     await fixture.controller.stop()
 
     #expect(engine.requestModels == [.small, .accuracy])
@@ -360,7 +360,7 @@ import Testing
             durationSeconds: 6
         )
     )
-    for _ in 0..<4 { await Task.yield() }
+    await waitForLiveDraftStatus(.unavailable, in: fixture.controller)
 
     let snapshot = try #require(fixture.controller.state.recordingSnapshot)
     #expect(snapshot.liveDraftStatus == .unavailable)
@@ -705,6 +705,19 @@ private final class SpyAudioRecorder: AudioRecordingManaging {
 
 private protocol FixtureTranscriptionEngine: TranscriptionEngine {
     @MainActor var callCount: Int { get }
+}
+
+@MainActor
+private func waitForLiveDraftStatus(
+    _ expected: LiveDraftStatus,
+    in controller: CaptureController
+) async {
+    for _ in 0..<1_000 {
+        if controller.state.recordingSnapshot?.liveDraftStatus == expected {
+            return
+        }
+        await Task.yield()
+    }
 }
 
 private final class ScriptedTranscriptionEngine: FixtureTranscriptionEngine, @unchecked Sendable {
