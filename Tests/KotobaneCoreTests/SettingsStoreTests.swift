@@ -48,7 +48,7 @@ import Testing
     defer { try? FileManager.default.removeItem(at: root) }
     let settingsURL = root.appending(path: "settings.json")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    try Data(#"{"version":2,"languageHint":"Turkish","model":"small","audioRetention":"deleteAfterTranscription","shortcut":{"keyCode":49,"modifiers":3}}"#.utf8).write(to: settingsURL)
+    try Data(#"{"version":2,"languageHint":"Turkish","model":"small","audioRetention":"deleteAfterTranscription","shortcut":{"keyCode":49,"modifiers":3},"pasteAfterOpening":false}"#.utf8).write(to: settingsURL)
 
     let migrated = try SettingsStore(url: settingsURL).load()
 
@@ -56,7 +56,7 @@ import Testing
     #expect(migrated.version == AppSettings.currentVersion)
 }
 
-@Test(arguments: [0, 3]) func unsupportedSettingsVersionsAreRejected(_ version: Int) throws {
+@Test(arguments: [0, 4]) func unsupportedSettingsVersionsAreRejected(_ version: Int) throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: root) }
     let settingsURL = root.appending(path: "settings.json")
