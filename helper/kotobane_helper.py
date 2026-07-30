@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+from array import array
 import json
 import math
 import os
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any, TextIO
+import wave
 
 from model_install import MODEL_SPECS, ModelValidationError, validate_model_directory
 
@@ -105,6 +108,69 @@ def _result_field(result: Any, *names: str, default: Any = None) -> Any:
     return default
 
 
+def _resampled_pcm_wav(audio: Path) -> tuple[str, Path | None]:
+    """Return a Qwen-ready WAV path without relying on an external ffmpeg binary."""
+    try:
+        with wave.open(str(audio), "rb") as reader:
+            channels = reader.getnchannels()
+            sample_width = reader.getsampwidth()
+            sample_rate = reader.getframerate()
+            compression = reader.getcomptype()
+            frames = reader.readframes(reader.getnframes())
+    except (OSError, wave.Error, EOFError):
+        return str(audio), None
+
+    if (
+        channels == 1
+        and sample_width == 2
+        and sample_rate == 16_000
+        and compression == "NONE"
+    ):
+        return str(audio), None
+    if channels < 1 or sample_width != 2 or compression != "NONE" or sample_rate < 1:
+        return str(audio), None
+
+    samples = array("h")
+    samples.frombytes(frames)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    mono = array(
+        "h",
+        (
+            round(sum(samples[index : index + channels]) / channels)
+            for index in range(0, len(samples), channels)
+        ),
+    )
+    target_frame_count = max(1, round(len(mono) * 16_000 / sample_rate))
+    resampled = array("h")
+    for target_index in range(target_frame_count):
+        position = target_index * sample_rate / 16_000
+        left = min(int(position), len(mono) - 1)
+        right = min(left + 1, len(mono) - 1)
+        fraction = position - left
+        resampled.append(round(mono[left] + (mono[right] - mono[left]) * fraction))
+    if sys.byteorder != "little":
+        resampled.byteswap()
+
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=".kotobane-asr-",
+        suffix=".wav",
+        dir=audio.parent,
+    )
+    os.close(descriptor)
+    normalized = Path(temporary_path)
+    try:
+        with wave.open(str(normalized), "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(16_000)
+            writer.writeframes(resampled.tobytes())
+    except Exception:
+        normalized.unlink(missing_ok=True)
+        raise
+    return str(normalized), normalized
+
+
 def transcribe(
     request: dict[str, Any],
     app_support_root: Path,
@@ -145,12 +211,10 @@ def transcribe(
 
     _force_offline_environment()
     selected_backend = backend if backend is not None else MLXQwenBackend()
+    normalized_audio: Path | None = None
     try:
-        result = selected_backend.transcribe(
-            str(model),
-            str(audio),
-            language,
-        )
+        backend_audio, normalized_audio = _resampled_pcm_wav(audio)
+        result = selected_backend.transcribe(str(model), backend_audio, language)
     except (ImportError, ModuleNotFoundError) as error:
         print(
             f"runtime unavailable for request {request_id}: {type(error).__name__}",
@@ -171,6 +235,9 @@ def transcribe(
             "transcription_failed",
             "Local transcription failed.",
         )
+    finally:
+        if normalized_audio is not None:
+            normalized_audio.unlink(missing_ok=True)
 
     text = _result_field(result, "text")
     if not isinstance(text, str):
