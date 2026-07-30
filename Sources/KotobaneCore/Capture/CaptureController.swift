@@ -55,7 +55,7 @@ public final class CaptureController {
     private var partialTranscript = RollingTranscriptAccumulator()
     private var partialAudioURLs: Set<URL> = []
     private var partialTranscriptionTask: Task<Void, Never>?
-    private var queuedPartialRecording: AudioRecording?
+    private var queuedPartialRecordings: [AudioRecording] = []
     private var liveDraftStatus: LiveDraftStatus = .waiting
     private var liveDraftMessage: String?
 
@@ -130,7 +130,7 @@ public final class CaptureController {
         state = .transcribing
         partialTranscriptionTask?.cancel()
         partialTranscriptionTask = nil
-        queuedPartialRecording = nil
+        queuedPartialRecordings = []
         let recording: AudioRecording
         do {
             recording = try recorder.stop()
@@ -213,7 +213,7 @@ public final class CaptureController {
         retryContext = nil
         partialTranscriptionTask?.cancel()
         partialTranscriptionTask = nil
-        queuedPartialRecording = nil
+        queuedPartialRecordings = []
 
         if case .recording = priorState {
             _ = try? recorder.stop()
@@ -321,9 +321,9 @@ public final class CaptureController {
         temporaryURL = url
         partialTranscript = RollingTranscriptAccumulator()
         partialAudioURLs = []
-        queuedPartialRecording = nil
+        queuedPartialRecordings = []
         liveDraftStatus = .waiting
-        liveDraftMessage = "Live draft starts after about six seconds of speech."
+        liveDraftMessage = "Live draft starts after about one second of speech."
         state = .recording(recordingSnapshot(elapsedSeconds: 0, rmsLevel: 0))
     }
 
@@ -338,10 +338,7 @@ public final class CaptureController {
             return
         }
         if partialTranscriptionTask != nil {
-            if let queuedPartialRecording {
-                removePartialAudio(at: queuedPartialRecording.fileURL)
-            }
-            queuedPartialRecording = recording
+            queuedPartialRecordings.append(recording)
             return
         }
         startPartialTranscription(
@@ -361,18 +358,18 @@ public final class CaptureController {
             defer {
                 self.partialTranscriptionTask = nil
                 self.removePartialAudio(at: recording.fileURL)
-                if let queued = self.queuedPartialRecording,
+                if let queued = self.queuedPartialRecordings.first,
                    self.operationID == operationID,
                    self.captureID == captureID,
                    self.state.isRecording {
-                    self.queuedPartialRecording = nil
+                    self.queuedPartialRecordings.removeFirst()
                     self.startPartialTranscription(
                         queued,
                         captureID: captureID,
                         operationID: operationID
                     )
                 } else {
-                    self.queuedPartialRecording = nil
+                    self.queuedPartialRecordings = []
                 }
             }
             self.liveDraftStatus = .transcribing
