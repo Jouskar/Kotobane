@@ -343,6 +343,30 @@ import Testing
 }
 
 @MainActor
+@Test func streamingEnginePublishesItsCumulativeTranscriptWhileRecording() async throws {
+    let engine = ScriptedStreamingTranscriptionEngine([
+        .success(.fixture(text: "Merhaba")),
+        .success(.fixture(text: "Merhaba Kotobane")),
+    ])
+    let fixture = CaptureFixture(engine: engine)
+    await fixture.controller.start()
+
+    fixture.recorder.publishPartial(
+        AudioRecording(fileURL: fixture.temporaryURL, frameCount: 16_000, durationSeconds: 1)
+    )
+    await waitForLiveDraftText("Merhaba", in: fixture.controller)
+    fixture.recorder.publishPartial(
+        AudioRecording(fileURL: fixture.temporaryURL, frameCount: 16_000, durationSeconds: 1)
+    )
+    await waitForLiveDraftText("Merhaba Kotobane", in: fixture.controller)
+
+    let snapshot = try #require(fixture.controller.state.recordingSnapshot)
+    #expect(snapshot.partialTranscript == "Merhaba Kotobane")
+    #expect(engine.startedStreamIDs == [fixture.id])
+    #expect(engine.fedStreamIDs == [fixture.id, fixture.id])
+}
+
+@MainActor
 @Test func failedPartialSegmentExplainsThatTheLiveDraftIsUnavailableWhileRecording() async throws {
     let engine = ScriptedTranscriptionEngine([
         .failure(TranscriptionFailure.helperRejected(
@@ -720,6 +744,19 @@ private func waitForLiveDraftStatus(
     }
 }
 
+@MainActor
+private func waitForLiveDraftText(
+    _ expected: String,
+    in controller: CaptureController
+) async {
+    for _ in 0..<1_000 {
+        if controller.state.recordingSnapshot?.partialTranscript == expected {
+            return
+        }
+        await Task.yield()
+    }
+}
+
 private final class ScriptedTranscriptionEngine: FixtureTranscriptionEngine, @unchecked Sendable {
     private let lock = NSLock()
     private var outcomes: [Result<TranscriptionResult, Error>]
@@ -748,6 +785,43 @@ private final class ScriptedTranscriptionEngine: FixtureTranscriptionEngine, @un
             CaptureFixtureRegistry.events(for: request.audioURL)?.append("transcribe")
         }
         return try outcome.get()
+    }
+}
+
+private final class ScriptedStreamingTranscriptionEngine: FixtureTranscriptionEngine, LiveStreamingTranscriptionEngine, @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcomes: [Result<TranscriptionResult, Error>]
+    private var calls = 0
+    private var started: [UUID] = []
+    private var fed: [UUID] = []
+
+    init(_ outcomes: [Result<TranscriptionResult, Error>]) {
+        self.outcomes = outcomes
+    }
+
+    @MainActor var callCount: Int { lock.withLock { calls } }
+    @MainActor var startedStreamIDs: [UUID] { lock.withLock { started } }
+    @MainActor var fedStreamIDs: [UUID] { lock.withLock { fed } }
+
+    func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
+        lock.withLock { calls += 1 }
+        return .fixture()
+    }
+
+    func startLiveStream(id: UUID, language: String) async throws {
+        lock.withLock { started.append(id) }
+    }
+
+    func feedLiveAudio(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
+        let outcome = lock.withLock {
+            fed.append(request.id)
+            return outcomes.removeFirst()
+        }
+        return try outcome.get()
+    }
+
+    func finishLiveStream(id: UUID, language: String) async {
+        _ = (id, language)
     }
 }
 

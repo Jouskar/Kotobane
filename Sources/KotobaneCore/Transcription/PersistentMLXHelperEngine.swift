@@ -1,6 +1,6 @@
 import Foundation
 
-public final class PersistentMLXHelperEngine: TranscriptionEngine, @unchecked Sendable {
+public final class PersistentMLXHelperEngine: LiveStreamingTranscriptionEngine, @unchecked Sendable {
     private let worker: PersistentHelperWorker
     private let allowedAudioRoot: URL
     private let limits: HelperProcessLimits
@@ -24,11 +24,54 @@ public final class PersistentMLXHelperEngine: TranscriptionEngine, @unchecked Se
     }
 
     public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
-        let audioURL = try validatedAudioURL(request.audioURL)
+        try await send(action: "transcribe", request: request, requiresAudio: true)
+    }
+
+    public func startLiveStream(id: UUID, language: String) async throws {
+        _ = try await send(
+            action: "stream_start",
+            request: TranscriptionRequest(
+                id: id,
+                audioURL: allowedAudioRoot,
+                language: language,
+                model: .small
+            ),
+            requiresAudio: false
+        )
+    }
+
+    public func feedLiveAudio(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
+        try await send(action: "stream_feed", request: request, requiresAudio: true)
+    }
+
+    public func finishLiveStream(id: UUID, language: String) async {
+        _ = try? await send(
+            action: "stream_finish",
+            request: TranscriptionRequest(
+                id: id,
+                audioURL: allowedAudioRoot,
+                language: language,
+                model: .small
+            ),
+            requiresAudio: false
+        )
+    }
+
+    private func send(
+        action: String,
+        request: TranscriptionRequest,
+        requiresAudio: Bool
+    ) async throws -> TranscriptionResult {
+        let audioPath: String
+        if requiresAudio {
+            audioPath = try validatedAudioURL(request.audioURL).path
+        } else {
+            audioPath = ""
+        }
         let helperRequest = HelperRequest(
             id: request.id,
-            action: "transcribe",
-            audioPath: audioURL.path,
+            action: action,
+            audioPath: audioPath,
             language: request.language,
             model: request.model.rawValue
         )

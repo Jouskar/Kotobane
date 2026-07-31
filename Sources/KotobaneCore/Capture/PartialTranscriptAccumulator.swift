@@ -30,6 +30,13 @@ public struct RollingTranscriptAccumulator: Equatable, Sendable {
         text
     }
 
+    public mutating func replace(with text: String) {
+        let words = Self.words(in: text)
+        guard !words.isEmpty else { return }
+        transcriptWords = words
+        previousWindowWords = words
+    }
+
     public mutating func replaceRollingWindow(with text: String) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextWindowWords = Self.words(in: trimmedText)

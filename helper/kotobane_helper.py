@@ -36,6 +36,7 @@ class MLXQwenBackend:
 
     def __init__(self):
         self._sessions: dict[str, Any] = {}
+        self._streams: dict[str, tuple[Any, Any, str]] = {}
 
     def transcribe(self, model_path: str, audio_path: str, language: str) -> Any:
         from mlx_qwen3_asr import Session
@@ -45,6 +46,44 @@ class MLXQwenBackend:
             session = Session(model=model_path)
             self._sessions[model_path] = session
         return session.transcribe(audio_path, language=language)
+
+    def start_stream(self, stream_id: str, model_path: str, language: str) -> None:
+        from mlx_qwen3_asr import Session
+
+        session = self._sessions.get(model_path)
+        if session is None:
+            session = Session(model=model_path)
+            self._sessions[model_path] = session
+        self._streams[stream_id] = (
+            session,
+            session.init_streaming(
+                language=language,
+                chunk_size_sec=1.0,
+                finalization_mode="latency",
+            ),
+            language,
+        )
+
+    def feed_stream(self, stream_id: str, audio_path: str) -> Any:
+        from mlx_qwen3_asr.audio import load_audio_np
+
+        session, state, _ = self._streams[stream_id]
+        state = session.feed_audio(load_audio_np(audio_path), state)
+        self._streams[stream_id] = (session, state, state.language)
+        return {
+            "text": state.text,
+            "detected_language": state.language,
+            "duration_seconds": float(state.chunk_id),
+        }
+
+    def finish_stream(self, stream_id: str) -> Any:
+        session, state, language = self._streams.pop(stream_id)
+        state = session.finish_streaming(state)
+        return {
+            "text": state.text,
+            "detected_language": state.language or language,
+            "duration_seconds": float(state.chunk_id),
+        }
 
 
 def _failed(request_id: str, code: str, message: str) -> dict[str, Any]:
@@ -171,12 +210,94 @@ def _resampled_pcm_wav(audio: Path) -> tuple[str, Path | None]:
     return str(normalized), normalized
 
 
+def _completed(request_id: str, result: Any, language: str) -> dict[str, Any]:
+    text = _result_field(result, "text")
+    if not isinstance(text, str):
+        return _failed(
+            request_id,
+            "transcription_failed",
+            "The local transcription backend returned an invalid result.",
+        )
+    detected_language = _result_field(
+        result,
+        "detected_language",
+        "language",
+        default=language,
+    )
+    duration = _result_field(
+        result,
+        "duration_seconds",
+        "duration",
+        default=0.0,
+    )
+    try:
+        normalized_duration = float(duration)
+        if not math.isfinite(normalized_duration) or normalized_duration < 0:
+            raise ValueError("duration must be finite and nonnegative")
+        normalized_language = str(detected_language)
+    except (TypeError, ValueError, OverflowError):
+        return _failed(
+            request_id,
+            "transcription_failed",
+            "The local transcription backend returned an invalid result.",
+        )
+    return {
+        "id": request_id,
+        "status": "completed",
+        "text": text,
+        "detectedLanguage": normalized_language,
+        "durationSeconds": normalized_duration,
+    }
+
+
+def stream(
+    request: dict[str, Any], app_support_root: Path, backend: Any | None = None
+) -> dict[str, Any]:
+    request_id = _request_id(request)
+    action = request.get("action") if isinstance(request, dict) else None
+    model_name = request.get("model") if isinstance(request, dict) else None
+    if not isinstance(model_name, str) or model_name not in MODEL_ALIASES:
+        return _failed(request_id, "unsupported_model", "The requested transcription model is not supported.")
+    try:
+        model = _validated_model(model_name, Path(app_support_root))
+    except (OSError, ValueError, json.JSONDecodeError, ModelValidationError):
+        return _failed(request_id, "model_unavailable", "The selected model is not installed and ready.")
+    language = request.get("language")
+    if not isinstance(language, str) or not language:
+        language = "Turkish"
+    selected_backend = backend if backend is not None else MLXQwenBackend()
+    _force_offline_environment()
+    normalized_audio: Path | None = None
+    try:
+        if action == "stream_start":
+            selected_backend.start_stream(request_id, str(model), language)
+            result: Any = {"text": "", "detected_language": language, "duration_seconds": 0.0}
+        elif action == "stream_feed":
+            audio = _validated_audio(request, Path(app_support_root))
+            backend_audio, normalized_audio = _resampled_pcm_wav(audio)
+            result = selected_backend.feed_stream(request_id, backend_audio)
+        elif action == "stream_finish":
+            result = selected_backend.finish_stream(request_id)
+        else:
+            return _failed(request_id, "unsupported_action", "Unsupported helper action.")
+    except (ImportError, ModuleNotFoundError):
+        return _failed(request_id, "runtime_unavailable", "The local transcription runtime is unavailable.")
+    except (OSError, RuntimeError, ValueError, KeyError):
+        return _failed(request_id, "transcription_failed", "Local transcription failed.")
+    finally:
+        if normalized_audio is not None:
+            normalized_audio.unlink(missing_ok=True)
+    return _completed(request_id, result, language)
+
+
 def transcribe(
     request: dict[str, Any],
     app_support_root: Path,
     backend: Any | None = None,
 ) -> dict[str, Any]:
     request_id = _request_id(request)
+    if isinstance(request, dict) and str(request.get("action", "")).startswith("stream_"):
+        return stream(request, app_support_root, backend)
     if not isinstance(request, dict) or request.get("action") != "transcribe":
         return _failed(request_id, "unsupported_action", "Unsupported helper action.")
 
@@ -239,47 +360,7 @@ def transcribe(
         if normalized_audio is not None:
             normalized_audio.unlink(missing_ok=True)
 
-    text = _result_field(result, "text")
-    if not isinstance(text, str):
-        return _failed(
-            request_id,
-            "transcription_failed",
-            "The local transcription backend returned an invalid result.",
-        )
-    detected_language = _result_field(
-        result,
-        "detected_language",
-        "language",
-        default=language,
-    )
-    duration = _result_field(
-        result,
-        "duration_seconds",
-        "duration",
-        default=0.0,
-    )
-    try:
-        normalized_duration = float(duration)
-        if not math.isfinite(normalized_duration) or normalized_duration < 0:
-            raise ValueError("duration must be finite and nonnegative")
-        normalized_language = str(detected_language)
-    except (TypeError, ValueError, OverflowError) as error:
-        print(
-            f"invalid backend result for request {request_id}: {type(error).__name__}",
-            file=sys.stderr,
-        )
-        return _failed(
-            request_id,
-            "transcription_failed",
-            "The local transcription backend returned an invalid result.",
-        )
-    return {
-        "id": request_id,
-        "status": "completed",
-        "text": text,
-        "detectedLanguage": normalized_language,
-        "durationSeconds": normalized_duration,
-    }
+    return _completed(request_id, result, language)
 
 
 def serve(
@@ -289,10 +370,11 @@ def serve(
     app_support_root: Path,
     backend: Any | None = None,
 ) -> None:
+    active_backend = backend if backend is not None else MLXQwenBackend()
     for line in stdin:
         try:
             request = json.loads(line)
-            response = transcribe(request, app_support_root, backend)
+            response = transcribe(request, app_support_root, active_backend)
         except Exception as error:
             print(f"invalid helper request: {type(error).__name__}", file=stderr)
             response = _failed(ZERO_ID, "invalid_request", "The helper request is invalid.")
