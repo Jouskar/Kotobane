@@ -37,6 +37,31 @@ class FakeBackend:
         return self.result
 
 
+class StreamingFakeBackend(FakeBackend):
+    def __init__(self):
+        super().__init__()
+        self.streams = {}
+
+    def start_stream(self, stream_id, model_path, language):
+        self.streams[stream_id] = []
+
+    def feed_stream(self, stream_id, audio_path):
+        self.streams[stream_id].append(audio_path)
+        return SimpleNamespace(
+            text="Merhaba dünya",
+            detected_language="Turkish",
+            duration_seconds=2.0,
+        )
+
+    def finish_stream(self, stream_id):
+        self.streams.pop(stream_id, None)
+        return SimpleNamespace(
+            text="Merhaba dünya",
+            detected_language="Turkish",
+            duration_seconds=2.0,
+        )
+
+
 def request_for(audio: Path, model: str = SMALL_MODEL) -> dict:
     return {
         "id": REQUEST_ID,
@@ -115,6 +140,31 @@ class HelperTests(unittest.TestCase):
         )
 
         self.assertEqual(response["text"], " şey, API'yi düzeltelim ")
+
+    def test_streaming_session_returns_cumulative_text_for_successive_audio_feeds(self):
+        first = self.root / "captures" / "first.wav"
+        second = self.root / "captures" / "second.wav"
+        first.parent.mkdir(parents=True)
+        first.write_bytes(b"RIFF")
+        second.write_bytes(b"RIFF")
+        prepare_model(self.root)
+        backend = StreamingFakeBackend()
+        start = request_for(first)
+        start["action"] = "stream_start"
+        start["audioPath"] = ""
+        feed_one = request_for(first)
+        feed_one["action"] = "stream_feed"
+        feed_two = request_for(second)
+        feed_two["action"] = "stream_feed"
+        finish = request_for(second)
+        finish["action"] = "stream_finish"
+        finish["audioPath"] = ""
+
+        self.assertEqual(transcribe(start, self.root, backend)["status"], "completed")
+        self.assertEqual(transcribe(feed_one, self.root, backend)["text"], "Merhaba dünya")
+        self.assertEqual(transcribe(feed_two, self.root, backend)["text"], "Merhaba dünya")
+        self.assertEqual(transcribe(finish, self.root, backend)["status"], "completed")
+        self.assertEqual(backend.streams, {})
 
     def test_backend_receives_only_canonical_local_paths_and_offline_environment(self):
         audio = self.root / "captures" / "note.wav"

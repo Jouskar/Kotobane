@@ -56,6 +56,7 @@ public final class CaptureController {
     private var partialAudioURLs: Set<URL> = []
     private var partialTranscriptionTask: Task<Void, Never>?
     private var queuedPartialRecordings: [AudioRecording] = []
+    private var liveStreamStarted = false
     private var liveDraftStatus: LiveDraftStatus = .waiting
     private var liveDraftMessage: String?
 
@@ -128,6 +129,7 @@ public final class CaptureController {
         else { return }
 
         state = .transcribing
+        finishLiveStreamIfNeeded(captureID: captureID)
         partialTranscriptionTask?.cancel()
         partialTranscriptionTask = nil
         queuedPartialRecordings = []
@@ -217,6 +219,7 @@ public final class CaptureController {
 
         if case .recording = priorState {
             _ = try? recorder.stop()
+            if let captureID { finishLiveStreamIfNeeded(captureID: captureID) }
         }
         if let temporaryURL {
             try? audioFiles.removeTemporaryAudio(at: temporaryURL)
@@ -322,6 +325,7 @@ public final class CaptureController {
         partialTranscript = RollingTranscriptAccumulator()
         partialAudioURLs = []
         queuedPartialRecordings = []
+        liveStreamStarted = false
         liveDraftStatus = .waiting
         liveDraftMessage = "Live draft starts after about one second of speech."
         state = .recording(recordingSnapshot(elapsedSeconds: 0, rmsLevel: 0))
@@ -376,19 +380,36 @@ public final class CaptureController {
             self.liveDraftMessage = "Creating live draft locally…"
             self.refreshRecordingSnapshot()
             do {
-                let result = try await self.transcriptionEngine.transcribe(
-                    TranscriptionRequest(
-                        audioURL: recording.fileURL,
-                        language: self.languageHint,
-                        model: .small
-                    )
+                let partialRequest = TranscriptionRequest(
+                    id: captureID,
+                    audioURL: recording.fileURL,
+                    language: self.languageHint,
+                    model: .small
                 )
+                let result: TranscriptionResult
+                let streamingEngine = self.transcriptionEngine as? any LiveStreamingTranscriptionEngine
+                if let streamingEngine {
+                    if !self.liveStreamStarted {
+                        self.liveStreamStarted = true
+                        try await streamingEngine.startLiveStream(
+                            id: captureID,
+                            language: self.languageHint
+                        )
+                    }
+                    result = try await streamingEngine.feedLiveAudio(partialRequest)
+                } else {
+                    result = try await self.transcriptionEngine.transcribe(partialRequest)
+                }
                 guard !Task.isCancelled,
                       self.operationID == operationID,
                       self.captureID == captureID,
                       self.state.isRecording
                 else { return }
-                self.partialTranscript.replaceRollingWindow(with: result.text)
+                if streamingEngine != nil {
+                    self.partialTranscript.replace(with: result.text)
+                } else {
+                    self.partialTranscript.replaceRollingWindow(with: result.text)
+                }
                 self.liveDraftStatus = .available
                 self.liveDraftMessage = nil
                 self.refreshRecordingSnapshot()
@@ -435,6 +456,14 @@ public final class CaptureController {
             return message
         }
         return "The local helper could not create this draft. The full transcript will still run after you stop."
+    }
+
+    private func finishLiveStreamIfNeeded(captureID: UUID) {
+        guard liveStreamStarted,
+              let streamingEngine = transcriptionEngine as? any LiveStreamingTranscriptionEngine
+        else { return }
+        liveStreamStarted = false
+        Task { await streamingEngine.finishLiveStream(id: captureID, language: languageHint) }
     }
 
     private func removePartialAudio() {

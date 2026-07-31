@@ -4,6 +4,14 @@ public protocol TranscriptionEngine: Sendable {
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult
 }
 
+/// An engine which holds one decoder state for a capture and advances it as audio arrives.
+/// Each feed result is the full, current live transcript rather than an isolated chunk.
+public protocol LiveStreamingTranscriptionEngine: TranscriptionEngine {
+    func startLiveStream(id: UUID, language: String) async throws
+    func feedLiveAudio(_ request: TranscriptionRequest) async throws -> TranscriptionResult
+    func finishLiveStream(id: UUID, language: String) async
+}
+
 public struct TranscriptionRequest: Equatable, Sendable {
     public let id: UUID
     public let audioURL: URL
