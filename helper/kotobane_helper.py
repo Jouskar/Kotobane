@@ -59,6 +59,7 @@ class MLXQwenBackend:
             session.init_streaming(
                 language=language,
                 chunk_size_sec=1.0,
+                max_new_tokens=24,
                 finalization_mode="latency",
             ),
             language,

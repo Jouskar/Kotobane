@@ -166,6 +166,26 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(transcribe(finish, self.root, backend)["status"], "completed")
         self.assertEqual(backend.streams, {})
 
+    def test_live_stream_limits_each_one_second_decode_to_a_short_token_budget(self):
+        init_arguments = []
+
+        class FakeSession:
+            def __init__(self, model):
+                self.model = model
+
+            def init_streaming(self, **kwargs):
+                init_arguments.append(kwargs)
+                return object()
+
+        with mock.patch.dict(
+            sys.modules,
+            {"mlx_qwen3_asr": SimpleNamespace(Session=FakeSession)},
+        ):
+            backend = kotobane_helper.MLXQwenBackend()
+            backend.start_stream(REQUEST_ID, "/private/model", "Turkish")
+
+        self.assertEqual(init_arguments[0]["max_new_tokens"], 24)
+
     def test_backend_receives_only_canonical_local_paths_and_offline_environment(self):
         audio = self.root / "captures" / "note.wav"
         audio.parent.mkdir(parents=True)
